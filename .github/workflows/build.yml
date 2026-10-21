@@ -27,3 +27,82 @@ jobs:
         with:
           name: STIDO-Empaya-Mastering-${{ matrix.os }}
           path: build/StidoEmpayaMastering_artefacts/Release/
+
+      - name: Create macOS installer
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          A="build/StidoEmpayaMastering_artefacts/Release"
+          rm -rf pkgroot pkgs plists res dmgsrc
+          mkdir -p pkgroot/vst3/Library/Audio/Plug-Ins/VST3 pkgroot/au/Library/Audio/Plug-Ins/Components pkgroot/app/Applications pkgs plists res dmgsrc
+          cp -R "$A"/VST3/*.vst3 pkgroot/vst3/Library/Audio/Plug-Ins/VST3/
+          cp -R "$A"/AU/*.component pkgroot/au/Library/Audio/Plug-Ins/Components/
+          cp -R "$A"/Standalone/*.app pkgroot/app/Applications/
+
+          build_pkg () {
+            pkgbuild --analyze --root "pkgroot/$1" "plists/$1.plist"
+            sed -i '' 's/<true\/>/<false\/>/g' "plists/$1.plist"
+            pkgbuild --root "pkgroot/$1" --component-plist "plists/$1.plist" --install-location / --identifier "$2" --version 1.0.0 "pkgs/$1.pkg"
+          }
+          build_pkg vst3 com.stido.empaya.vst3
+          build_pkg au com.stido.empaya.au
+          build_pkg app com.stido.empaya.app
+
+          cat > res/welcome.html <<'EOF'
+          <html><head><meta charset="utf-8"></head>
+          <body style="font-family: -apple-system, Helvetica; font-size: 14px;">
+          <h2>Bienvenue dans l'installateur de STIDO Empaya Mastering</h2>
+          <p>Cet assistant installe le plugin de mastering STIDO Empaya Mastering sur votre Mac.</p>
+          <p>Vous pouvez choisir les formats à installer : VST3 (Reaper, Ableton Live, Cubase, Studio One, FL Studio), Audio Unit (Logic Pro, GarageBand) et l'application autonome.</p>
+          <p>Cliquez sur Continuer pour commencer.</p>
+          </body></html>
+          EOF
+
+          cat > res/conclusion.html <<'EOF'
+          <html><head><meta charset="utf-8"></head>
+          <body style="font-family: -apple-system, Helvetica; font-size: 14px;">
+          <h2>Installation terminée</h2>
+          <p>STIDO Empaya Mastering est installé.</p>
+          <p>Relancez votre logiciel de musique, puis cherchez « STIDO » dans votre liste de plugins. Au besoin, lancez une nouvelle analyse des plugins dans les préférences du logiciel.</p>
+          <p>L'application autonome se trouve dans le dossier Applications.</p>
+          </body></html>
+          EOF
+
+          cat > distribution.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <installer-gui-script minSpecVersion="2">
+            <title>STIDO Empaya Mastering</title>
+            <welcome file="welcome.html" mime-type="text/html"/>
+            <conclusion file="conclusion.html" mime-type="text/html"/>
+            <options customize="allow" require-scripts="false"/>
+            <domains enable_localSystem="true"/>
+            <choices-outline>
+              <line choice="vst3"/>
+              <line choice="au"/>
+              <line choice="app"/>
+            </choices-outline>
+            <choice id="vst3" title="Plugin VST3" description="Pour Reaper, Ableton Live, Cubase, Studio One, FL Studio.">
+              <pkg-ref id="com.stido.empaya.vst3"/>
+            </choice>
+            <choice id="au" title="Plugin Audio Unit" description="Pour Logic Pro et GarageBand.">
+              <pkg-ref id="com.stido.empaya.au"/>
+            </choice>
+            <choice id="app" title="Application autonome" description="Version indépendante, installée dans le dossier Applications.">
+              <pkg-ref id="com.stido.empaya.app"/>
+            </choice>
+            <pkg-ref id="com.stido.empaya.vst3" version="1.0.0">vst3.pkg</pkg-ref>
+            <pkg-ref id="com.stido.empaya.au" version="1.0.0">au.pkg</pkg-ref>
+            <pkg-ref id="com.stido.empaya.app" version="1.0.0">app.pkg</pkg-ref>
+          </installer-gui-script>
+          EOF
+
+          productbuild --distribution distribution.xml --resources res --package-path pkgs "STIDO Empaya Mastering Installer.pkg"
+          cp "STIDO Empaya Mastering Installer.pkg" dmgsrc/
+          hdiutil create -volname "STIDO Empaya Mastering" -srcfolder dmgsrc -ov -format UDZO "STIDO-Empaya-Mastering-macOS.dmg"
+
+      - name: Upload macOS installer
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: STIDO-Empaya-Mastering-Installer-macOS
+          path: STIDO-Empaya-Mastering-macOS.dmg

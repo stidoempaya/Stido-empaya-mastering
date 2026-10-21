@@ -1,0 +1,200 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+//==============================================================================
+juce::AudioProcessorValueTreeState::ParameterLayout MasteringProcessor::createLayout()
+{
+    using P = juce::AudioParameterFloat;
+    using R = juce::NormalisableRange<float>;
+    using Attr = juce::AudioParameterFloatAttributes;
+
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+
+    auto add = [&] (const char* id, const char* name, R range, float def, const char* unit)
+    {
+        layout.add (std::make_unique<P> (juce::ParameterID { id, 1 }, juce::String::fromUTF8 (name), range, def,
+                                         Attr().withLabel (unit)));
+    };
+
+    // Entrée / égaliseur
+    add ("inGain",   "Entrée",     R (-12.f, 12.f, 0.1f), 0.f, "dB");
+    add ("lowGain",  "Graves",       R (-12.f, 12.f, 0.1f), 0.f, "dB");   // shelf @ 100 Hz
+    add ("midGain",  "Médiums",       R (-12.f, 12.f, 0.1f), 0.f, "dB");
+    add ("midFreq",  "Fréq. médiums",  R (200.f, 5000.f, 1.f, 0.3f), 1000.f, "Hz");
+    add ("highGain", "Aigus",      R (-12.f, 12.f, 0.1f), 0.f, "dB");   // shelf @ 8 kHz
+
+    // Compresseur "glue"
+    add ("compThresh",  "Seuil", R (-40.f, 0.f, 0.1f), -12.f, "dB");
+    add ("compRatio",   "Ratio",     R (1.f, 10.f, 0.1f), 2.f, ":1");
+    add ("compAttack",  "Attaque",    R (1.f, 100.f, 0.1f, 0.4f), 30.f, "ms");
+    add ("compRelease", "Relâchement",   R (20.f, 500.f, 1.f, 0.4f), 150.f, "ms");
+    add ("compMakeup",  "Compensation",    R (0.f, 12.f, 0.1f), 0.f, "dB");
+
+    // Stéréo / limiteur / sortie
+    add ("width",      "Largeur",      R (0.f, 200.f, 1.f), 100.f, "%");
+    add ("drive",      "Poussée",      R (0.f, 12.f, 0.1f), 0.f, "dB");
+    add ("ceiling",    "Plafond",    R (-12.f, 0.f, 0.1f), -1.f, "dB");
+    add ("limRelease", "Relâch. limiteur",    R (10.f, 500.f, 1.f, 0.4f), 100.f, "ms");
+    add ("outGain",    "Sortie",     R (-12.f, 12.f, 0.1f), 0.f, "dB");
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "bypass", 1 },
+                                                            juce::String::fromUTF8 ("Contourner"), false));
+    return layout;
+}
+
+//==============================================================================
+MasteringProcessor::MasteringProcessor()
+    : AudioProcessor (BusesProperties()
+                          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+      apvts (*this, nullptr, "PARAMS", createLayout())
+{
+    auto get = [this] (const char* id) { return apvts.getRawParameterValue (id); };
+
+    prm = { get ("inGain"), get ("lowGain"), get ("midGain"), get ("midFreq"), get ("highGain"),
+            get ("compThresh"), get ("compRatio"), get ("compAttack"), get ("compRelease"),
+            get ("compMakeup"), get ("width"), get ("drive"), get ("ceiling"),
+            get ("limRelease"), get ("outGain"), get ("bypass") };
+}
+
+bool MasteringProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    return layouts.getMainInputChannelSet()  == juce::AudioChannelSet::stereo()
+        && layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+}
+
+void MasteringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    juce::dsp::ProcessSpec spec { sampleRate,
+                                  (juce::uint32) samplesPerBlock,
+                                  (juce::uint32) getTotalNumOutputChannels() };
+
+    for (auto* g : { &inGain, &makeup, &drive, &outGain })
+    {
+        g->prepare (spec);
+        g->setRampDurationSeconds (0.05);
+    }
+
+    lowShelf.prepare (spec);
+    midPeak.prepare (spec);
+    highShelf.prepare (spec);
+    compressor.prepare (spec);
+    limiter.prepare (spec);
+
+    cache = {};          // force the filter coefficients to be recomputed
+    updateDSP();
+}
+
+void MasteringProcessor::updateDSP()
+{
+    const auto sr = getSampleRate();
+    using juce::Decibels;
+
+    const float low = prm.lowGain->load(), mid = prm.midGain->load(),
+                mf  = prm.midFreq->load(), high = prm.highGain->load();
+
+    if (low != cache.low)
+    {
+        cache.low = low;
+        *lowShelf.state = *Coeffs::makeLowShelf (sr, 100.0f, 0.707f, Decibels::decibelsToGain (low));
+    }
+    if (mid != cache.mid || mf != cache.midFreq)
+    {
+        cache.mid = mid;
+        cache.midFreq = mf;
+        *midPeak.state = *Coeffs::makePeakFilter (sr, mf, 0.8f, Decibels::decibelsToGain (mid));
+    }
+    if (high != cache.high)
+    {
+        cache.high = high;
+        *highShelf.state = *Coeffs::makeHighShelf (sr, 8000.0f, 0.707f, Decibels::decibelsToGain (high));
+    }
+
+    inGain.setGainDecibels  (prm.inGain->load());
+    makeup.setGainDecibels  (prm.compMakeup->load());
+    drive.setGainDecibels   (prm.drive->load());
+    outGain.setGainDecibels (prm.outGain->load());
+
+    compressor.setThreshold (prm.compThresh->load());
+    compressor.setRatio     (prm.compRatio->load());
+    compressor.setAttack    (prm.compAttack->load());
+    compressor.setRelease   (prm.compRelease->load());
+
+    limiter.setThreshold (prm.ceiling->load());
+    limiter.setRelease   (prm.limRelease->load());
+}
+
+//==============================================================================
+void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int numSamples = buffer.getNumSamples();
+
+    for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
+        buffer.clear (ch, 0, numSamples);
+
+    if (prm.bypass->load() < 0.5f)
+    {
+        updateDSP();
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        juce::dsp::ProcessContextReplacing<float> ctx (block);
+
+        inGain.process (ctx);
+        lowShelf.process (ctx);
+        midPeak.process (ctx);
+        highShelf.process (ctx);
+        compressor.process (ctx);
+        makeup.process (ctx);
+
+        // Mid/Side stereo width
+        if (buffer.getNumChannels() >= 2)
+        {
+            const float w = prm.width->load() * 0.01f;
+            auto* l = buffer.getWritePointer (0);
+            auto* r = buffer.getWritePointer (1);
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float m = 0.5f * (l[i] + r[i]);
+                const float s = 0.5f * (l[i] - r[i]) * w;
+                l[i] = m + s;
+                r[i] = m - s;
+            }
+        }
+
+        drive.process (ctx);
+        limiter.process (ctx);
+        outGain.process (ctx);
+    }
+
+    // Peak metering (keep the max until the editor reads it)
+    const float mL = buffer.getMagnitude (0, 0, numSamples);
+    const float mR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, numSamples) : mL;
+    if (mL > peakL.load()) peakL.store (mL);
+    if (mR > peakR.load()) peakR.store (mR);
+}
+
+//==============================================================================
+juce::AudioProcessorEditor* MasteringProcessor::createEditor()
+{
+    return new MasteringEditor (*this);
+}
+
+void MasteringProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    if (auto xml = apvts.copyState().createXml())
+        copyXmlToBinary (*xml, destData);
+}
+
+void MasteringProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    if (auto xml = getXmlFromBinary (data, sizeInBytes))
+        if (xml->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new MasteringProcessor();
+}

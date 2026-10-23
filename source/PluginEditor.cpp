@@ -60,7 +60,7 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
 
     addAndMakeVisible (gainMatch);
     gainMatch.setColour (juce::ToggleButton::textColourId, textCol);
-    gainMatch.setColour (juce::ToggleButton::tickColourId, accent);
+    gainMatch.setColour (juce::ToggleButton::tickColourId, warnCol);
     gainMatch.setTooltip (fr ("Écoute le master au même volume que l'original, pour comparer avec Contourner. "
                               "Les mesures restent celles du master."));
     gainMatchAttach = std::make_unique<ButtonAttachment> (proc.apvts, "gainMatch", gainMatch);
@@ -227,7 +227,7 @@ void MasteringEditor::paint (juce::Graphics& g)
 
         g.setFont (juce::FontOptions (13.0f));
         g.setColour (on ? (deessGr > 0.1f ? eqCol : textCol) : textCol.withAlpha (0.5f));
-        g.drawText (on ? fr ("Réduction des « s » : -") + juce::String (deessGr, 1) + " dB"
+        g.drawText (on ? fr ("Réduction des « s » : ") + (deessGr < 0.05f ? juce::String ("0") : "-" + juce::String (deessGr, 1)) + " dB"
                        : fr ("Désactivé (montez Quantité pour adoucir les « s »)"),
                     info, juce::Justification::centredLeft);
     }
@@ -235,7 +235,7 @@ void MasteringEditor::paint (juce::Graphics& g)
     // Gain match correction, next to its button
     if (gainMatch.getToggleState() && ! bypass.getToggleState())
     {
-        g.setColour (accent);
+        g.setColour (warnCol);
         g.setFont (juce::FontOptions (12.0f));
         g.drawText ((matchDb >= 0.0f ? "+" : "") + juce::String (matchDb, 1) + " dB", gainMatchInfo,
                     juce::Justification::centredRight);
@@ -243,6 +243,18 @@ void MasteringEditor::paint (juce::Graphics& g)
 
     drawSpectrum (g);
     drawLoudness (g);
+
+    // Gain Match warning banner, over the spectrum: the listening level is not the real master level
+    if (gainMatch.getToggleState())
+    {
+        auto banner = spectrumArea.reduced (14, 0).removeFromBottom (26).translated (0, -8);
+        g.setColour (warnCol);
+        g.fillRoundedRectangle (banner.toFloat(), 5.0f);
+        g.setColour (bg);
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText (fr ("GAIN MATCH ACTIF : volume baissé pour comparer. Décochez avant d'exporter !"),
+                    banner, juce::Justification::centred);
+    }
 
     // Style / intensity row
     g.setColour (panel);
@@ -260,11 +272,20 @@ void MasteringEditor::paint (juce::Graphics& g)
         g.setColour (panel);
         g.fillRect (r);
 
-        const float clamped = juce::jlimit (-60.0f, 0.0f, db);
-        const float y = juce::jmap (clamped, -60.0f, 0.0f, (float) r.getBottom(), (float) r.getY());
+        auto yFor = [&] (float v) { return juce::jmap (juce::jlimit (-60.0f, 0.0f, v), -60.0f, 0.0f, (float) r.getBottom(), (float) r.getY()); };
 
-        g.setColour (db > -1.0f ? juce::Colours::red : db > -9.0f ? juce::Colours::orange : accent);
-        g.fillRect (juce::Rectangle<float> ((float) r.getX(), y, (float) r.getWidth(), r.getBottom() - y));
+        // Zones: blue up to -9 dB, orange up to -1 dB, red above
+        const struct { float lo, hi; juce::Colour col; } zones[] = {
+            { -60.0f, -9.0f, accent }, { -9.0f, -1.0f, juce::Colours::orange }, { -1.0f, 0.0f, juce::Colours::red } };
+
+        for (const auto& z : zones)
+        {
+            if (db <= z.lo)
+                break;
+            const float top = yFor (juce::jmin (db, z.hi)), bottom = yFor (z.lo);
+            g.setColour (z.col);
+            g.fillRect (juce::Rectangle<float> ((float) r.getX(), top, (float) r.getWidth(), bottom - top));
+        }
     };
 
     const int barW = meterArea.getWidth() / 2 - 3;
@@ -510,6 +531,7 @@ void MasteringEditor::drawSpectrum (juce::Graphics& g)
                                            Decibels::decibelsToGain (param ("highGain")));
 
         juce::Path eq;
+        bool first = true;
         for (float x = plot.getX(); x <= plot.getRight(); x += 2.0f)
         {
             const double f = freqAt ((x - plot.getX()) / plot.getWidth());
@@ -517,8 +539,9 @@ void MasteringEditor::drawSpectrum (juce::Graphics& g)
                              * high->getMagnitudeForFrequency (f, sr);
             const float y = yForEq (Decibels::gainToDecibels ((float) mag));
 
-            if (eq.isEmpty()) eq.startNewSubPath (x, y);
-            else              eq.lineTo (x, y);
+            if (first) eq.startNewSubPath (x, y);
+            else       eq.lineTo (x, y);
+            first = false;
         }
 
         g.setColour (eqCol);

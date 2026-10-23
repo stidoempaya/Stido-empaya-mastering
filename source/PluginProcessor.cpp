@@ -655,7 +655,14 @@ void MasteringProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
+            // Gain Match is a listening aid: always off when a project is opened, so it is never exported by mistake
+            for (auto* p : xml->getChildWithTagNameIterator ("PARAM"))
+                if (p->getStringAttribute ("id") == "gainMatch")
+                    p->setAttribute ("value", 0.0);
+
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+        }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

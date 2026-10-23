@@ -26,6 +26,7 @@ Il résume l'historique du projet et les décisions prises, pour reprendre le tr
 ### Octobre 2026 — plan « comme LANDR » (étapes A à D, une PR par étape)
 - Ordre validé par l'utilisateur : A dé-esseur + Gain Match → B styles (Chaud, Équilibré, Ouvert) + Intensité → C bouton Analyser (règles, pas d'IA : spectre vs courbe de référence + LUFS vs cible) → D vues « Simple » / « Avancé ».
 - A (branche `deesseur`) : dé-esseur à bande séparée (Linkwitz-Riley, détection haute bande / pleine bande, ratio 4:1) après l'égaliseur ; Gain Match en sortie (K-weighting, moyenne ~3 s, ±24 dB), appliqué après les mesures et figé pendant Contourner. Nouveaux paramètres ajoutés en fin de liste : `deessAmount`, `deessFreq`, `gainMatch`.
+- B (branche `styles`, construite sur `deesseur`) : styles et intensités = raccourcis (pas des paramètres automatisables) qui écrivent plusieurs paramètres depuis l'interface (`applyStyle` / `applyIntensity` dans le processeur). Le style touche le timbre (EQ, dé-esseur, largeur, attaque/relâchement), l'intensité le niveau (seuil, ratio, compensation, Poussée, Plafond, relâchement du limiteur) ; ils ne se chevauchent pas. Dernier choix gardé dans `apvts.state` (`style`, `intensity`). Rangée « STYLE / INTENSITÉ » sous le spectre, fenêtre toujours 760 × 780.
 - La liste des plateformes (cible LUFS) ne change pas le son : elle n'agira qu'avec le bouton Analyser (étape C).
 
 ## Pro Tools (AAX) — en attente de l'utilisateur

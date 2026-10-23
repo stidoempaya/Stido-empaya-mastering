@@ -41,6 +41,11 @@ private:
     juce::ComboBox targetBox;
     std::unique_ptr<ComboAttachment> targetAttach;
     juce::TextButton resetLoudness;
+
+    // Style / intensity shortcuts
+    std::array<juce::TextButton, 3> styleButtons, intensityButtons;
+    juce::Rectangle<int> presetArea;
+    void refreshPresetButtons();
     float lufsM = MasteringProcessor::noLoudness, lufsS = MasteringProcessor::noLoudness,
           lufsI = MasteringProcessor::noLoudness, truePeak = MasteringProcessor::noLoudness;
 

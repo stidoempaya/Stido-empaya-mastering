@@ -503,6 +503,71 @@ void MasteringProcessor::pushToAnalyser (const juce::AudioBuffer<float>& buffer)
 }
 
 //==============================================================================
+void MasteringProcessor::setParameters (std::initializer_list<std::pair<const char*, float>> values)
+{
+    for (const auto& [id, value] : values)
+    {
+        if (auto* p = apvts.getParameter (id))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 (value));
+            p->endChangeGesture();
+        }
+    }
+}
+
+void MasteringProcessor::applyStyle (int index)
+{
+    // Tone: EQ, de-esser, stereo width, compressor speed
+    switch (index)
+    {
+        case 0:  // Chaud : graves généreux, aigus adoucis, compression lente
+            setParameters ({ { "lowGain", 2.5f }, { "midGain", -1.0f }, { "midFreq", 2500.0f }, { "highGain", -1.0f },
+                             { "deessAmount", 20.0f }, { "width", 100.0f },
+                             { "compAttack", 30.0f }, { "compRelease", 200.0f } });
+            break;
+        case 1:  // Équilibré : léger sourire, neutre
+            setParameters ({ { "lowGain", 1.0f }, { "midGain", 0.0f }, { "midFreq", 1000.0f }, { "highGain", 1.0f },
+                             { "deessAmount", 15.0f }, { "width", 105.0f },
+                             { "compAttack", 20.0f }, { "compRelease", 150.0f } });
+            break;
+        case 2:  // Ouvert : présence et brillance, plus large, compression rapide
+            setParameters ({ { "lowGain", 0.0f }, { "midGain", 1.0f }, { "midFreq", 3000.0f }, { "highGain", 2.5f },
+                             { "deessAmount", 25.0f }, { "width", 115.0f },
+                             { "compAttack", 15.0f }, { "compRelease", 120.0f } });
+            break;
+        default:
+            return;
+    }
+
+    apvts.state.setProperty ("style", index, nullptr);
+}
+
+void MasteringProcessor::applyIntensity (int index)
+{
+    // Level: compression amount, push into the limiter, ceiling
+    switch (index)
+    {
+        case 0:  // Faible
+            setParameters ({ { "compThresh", -10.0f }, { "compRatio", 1.5f }, { "compMakeup", 1.0f },
+                             { "drive", 1.0f }, { "ceiling", -1.0f }, { "limRelease", 100.0f } });
+            break;
+        case 1:  // Moyenne
+            setParameters ({ { "compThresh", -14.0f }, { "compRatio", 2.0f }, { "compMakeup", 2.0f },
+                             { "drive", 3.0f }, { "ceiling", -1.0f }, { "limRelease", 80.0f } });
+            break;
+        case 2:  // Forte
+            setParameters ({ { "compThresh", -18.0f }, { "compRatio", 3.0f }, { "compMakeup", 3.0f },
+                             { "drive", 6.0f }, { "ceiling", -1.0f }, { "limRelease", 60.0f } });
+            break;
+        default:
+            return;
+    }
+
+    apvts.state.setProperty ("intensity", index, nullptr);
+}
+
+//==============================================================================
 juce::AudioProcessorEditor* MasteringProcessor::createEditor()
 {
     return new MasteringEditor (*this);

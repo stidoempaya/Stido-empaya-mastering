@@ -59,6 +59,13 @@ public:
                        integratedLufs { noLoudness }, truePeakDb { noLoudness };
     std::atomic<bool> loudnessResetRequested { false };
 
+    // Styles and intensities: one click sets several parameters (message thread only).
+    // The last choice is kept in apvts.state ("style" / "intensity", -1 = none) for display.
+    static constexpr const char* styleNames[]     = { "Chaud", "Équilibré", "Ouvert" };
+    static constexpr const char* intensityNames[] = { "Faible", "Moyenne", "Forte" };
+    void applyStyle (int index);
+    void applyIntensity (int index);
+
     // De-esser gain reduction (dB, positive) and gain match correction (dB), for display
     std::atomic<float> deessReductionDb { 0.0f }, gainMatchDb { 0.0f };
 
@@ -70,6 +77,7 @@ private:
     void endLoudnessSubBlock();
     void resetLoudness();
     void processDeEsser (juce::AudioBuffer<float>&);
+    void setParameters (std::initializer_list<std::pair<const char*, float>>);
 
     using Filter  = juce::dsp::IIR::Filter<float>;
     using Coeffs  = juce::dsp::IIR::Coefficients<float>;

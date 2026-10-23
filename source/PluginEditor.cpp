@@ -81,6 +81,28 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     resetLoudness.onClick = [this] { proc.loudnessResetRequested.store (true); };
     addAndMakeVisible (resetLoudness);
 
+    // Styles (tone) and intensities (level): one click sets several knobs
+    auto setupGroup = [this] (std::array<juce::TextButton, 3>& buttons, const char* const* names, int group,
+                              std::function<void (int)> apply)
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            auto& b = buttons[(size_t) i];
+            b.setButtonText (fr (names[i]));
+            b.setClickingTogglesState (true);
+            b.setRadioGroupId (group);
+            b.setColour (juce::TextButton::buttonColourId, bg);
+            b.setColour (juce::TextButton::buttonOnColourId, accent);
+            b.setColour (juce::TextButton::textColourOffId, textCol);
+            b.setColour (juce::TextButton::textColourOnId, bg);
+            b.onClick = [apply, i, &b] { if (b.getToggleState()) apply (i); };
+            addAndMakeVisible (b);
+        }
+    };
+    setupGroup (styleButtons, MasteringProcessor::styleNames, 1001, [this] (int i) { proc.applyStyle (i); });
+    setupGroup (intensityButtons, MasteringProcessor::intensityNames, 1002, [this] (int i) { proc.applyIntensity (i); });
+    refreshPresetButtons();
+
     targetDb.fill (minDb);
     spectrumDb.fill (minDb);
 
@@ -123,6 +145,20 @@ void MasteringEditor::resized()
     loudnessArea = top.removeFromRight (220).reduced (2, 3);
     spectrumArea = top.withTrimmedRight (4).reduced (2, 3);
     area.removeFromTop (6);
+
+    // Style / intensity row
+    presetArea = area.removeFromTop (40).reduced (2, 3);
+    {
+        auto p = presetArea.reduced (10, 6);
+        p.removeFromLeft (50);                                // "STYLE" label
+        for (auto& b : styleButtons)
+            b.setBounds (p.removeFromLeft (95).reduced (2, 0));
+
+        p.removeFromLeft (30);
+        p.removeFromLeft (75);                                // "INTENSITÉ" label
+        for (auto& b : intensityButtons)
+            b.setBounds (p.removeFromLeft (85).reduced (2, 0));
+    }
 
     auto l = loudnessArea.reduced (10, 6);
     l.removeFromTop (18);
@@ -191,6 +227,16 @@ void MasteringEditor::paint (juce::Graphics& g)
 
     drawSpectrum (g);
     drawLoudness (g);
+
+    // Style / intensity row
+    g.setColour (panel);
+    g.fillRoundedRectangle (presetArea.toFloat(), 8.0f);
+    g.setColour (accent);
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText ("STYLE", presetArea.getX() + 10, presetArea.getY(), 50, presetArea.getHeight(),
+                juce::Justification::centredLeft);
+    g.drawText (fr ("INTENSITÉ"), styleButtons[2].getRight() + 32, presetArea.getY(), 75, presetArea.getHeight(),
+                juce::Justification::centredLeft);
 
     // Peak meters (-60 .. 0 dB)
     auto drawBar = [&] (juce::Rectangle<int> r, float db)
@@ -443,4 +489,17 @@ void MasteringEditor::drawSpectrum (juce::Graphics& g)
     g.drawText (fr ("SPECTRE (SORTIE)"), top, juce::Justification::centredLeft);
     g.setColour (eqCol);
     g.drawText (fr ("COURBE EQ (±18 dB)"), top, juce::Justification::centredRight);
+}
+
+void MasteringEditor::refreshPresetButtons()
+{
+    // Show the last style / intensity applied (saved with the project)
+    const int style     = proc.apvts.state.getProperty ("style", -1);
+    const int intensity = proc.apvts.state.getProperty ("intensity", -1);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        styleButtons[(size_t) i].setToggleState (i == style, juce::dontSendNotification);
+        intensityButtons[(size_t) i].setToggleState (i == intensity, juce::dontSendNotification);
+    }
 }

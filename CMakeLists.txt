@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
+# --- Compatibilite macOS -----------------------------------------------------
+# A definir AVANT project(). Sans ca, le plugin n'est compatible qu'avec la
+# version de macOS de la machine qui compile.
+# 10.13 (High Sierra) est la version la plus ancienne acceptee par Xcode recent.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Version minimale de macOS")
+# Binaire universel : Mac Intel (x86_64) + Mac Apple Silicon M1/M2/M3/M4 (arm64)
+set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Architectures macOS")
+
 project(StidoEmpayaMastering VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -45,8 +53,8 @@ juce_add_plugin(StidoEmpayaMastering
     COPY_PLUGIN_AFTER_BUILD ${COPY_AFTER_BUILD})
 
 target_sources(StidoEmpayaMastering PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    source/PluginProcessor.cpp
+    source/PluginEditor.cpp)
 
 target_compile_definitions(StidoEmpayaMastering PUBLIC
     JUCE_WEB_BROWSER=0

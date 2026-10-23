@@ -45,6 +45,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout MasteringProcessor::createLa
         targets.add (t.name);
     layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { "target", 1 },
                                                               "Cible loudness", targets, 0));
+
+    // Dé-esseur (0 % = désactivé) et Gain Match
+    add ("deessAmount", "Dé-esseur",       R (0.f, 100.f, 1.f), 0.f, "%");
+    add ("deessFreq",   "Fréq. dé-esseur", R (3000.f, 12000.f, 1.f, 0.5f), 6500.f, "Hz");
+    layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "gainMatch", 1 },
+                                                            "Gain Match", false));
     return layout;
 }
 
@@ -60,7 +66,8 @@ MasteringProcessor::MasteringProcessor()
     prm = { get ("inGain"), get ("lowGain"), get ("midGain"), get ("midFreq"), get ("highGain"),
             get ("compThresh"), get ("compRatio"), get ("compAttack"), get ("compRelease"),
             get ("compMakeup"), get ("width"), get ("drive"), get ("ceiling"),
-            get ("limRelease"), get ("outGain"), get ("bypass") };
+            get ("limRelease"), get ("outGain"), get ("bypass"),
+            get ("deessAmount"), get ("deessFreq"), get ("gainMatch") };
 }
 
 bool MasteringProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -118,9 +125,34 @@ void MasteringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
         highPass.a1 = 2.0 * (K * K - 1.0) / a0;
         highPass.a2 = (1.0 - K / Q + K * K) / a0;
 
+        kShelfProto = shelf;
+        kHighPassProto = highPass;
         kShelf.fill (shelf);
         kHighPass.fill (highPass);
     }
+
+    // De-esser
+    for (auto* f : { &deessLow, &deessHigh })
+    {
+        f->prepare (spec);
+        f->setCutoffFrequency (prm.deessFreq->load());
+    }
+    deessLow.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
+    deessHigh.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
+    deessAttack  = 1.0f - std::exp (-1.0f / (0.001f * (float) sampleRate));
+    deessRelease = 1.0f - std::exp (-1.0f / (0.060f * (float) sampleRate));
+    deessEnvHigh = deessEnvFull = 0.0f;
+    deessActive = false;
+
+    // Gain match
+    gmInShelf.fill (kShelfProto);
+    gmOutShelf.fill (kShelfProto);
+    gmInHighPass.fill (kHighPassProto);
+    gmOutHighPass.fill (kHighPassProto);
+    gmInMs = gmOutMs = 0.0;
+    gmCoef = std::exp (-1.0 / (3.0 * sampleRate));
+    gainMatchGain.reset (sampleRate, 0.1);
+    gainMatchGain.setCurrentAndTargetValue (1.0f);
 
     subBlockLength = juce::jmax (1, juce::roundToInt (sampleRate * 0.1));
     maxBlockSize = samplesPerBlock;
@@ -195,9 +227,12 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear (ch, 0, numSamples);
 
-    if (prm.bypass->load() < 0.5f)
+    const bool active = prm.bypass->load() < 0.5f;
+
+    if (active)
     {
         updateDSP();
+        gmInMs = averageKWeighted (buffer, gmInShelf, gmInHighPass, gmInMs);
 
         juce::dsp::AudioBlock<float> block (buffer);
         juce::dsp::ProcessContextReplacing<float> ctx (block);
@@ -206,6 +241,7 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         lowShelf.process (ctx);
         midPeak.process (ctx);
         highShelf.process (ctx);
+        processDeEsser (buffer);
         compressor.process (ctx);
         makeup.process (ctx);
 
@@ -228,6 +264,8 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         drive.process (ctx);
         limiter.process (ctx);
         outGain.process (ctx);
+
+        gmOutMs = averageKWeighted (buffer, gmOutShelf, gmOutHighPass, gmOutMs);
     }
 
     // Peak metering (keep the max until the editor reads it)
@@ -238,6 +276,96 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     pushToAnalyser (buffer);
     measureLoudness (buffer);
+
+    // Gain match, after the meters (they always show the real master). Estimates freeze while bypassed.
+    float matchGain = 1.0f;
+    if (active && prm.gainMatch->load() >= 0.5f && gmInMs > 1e-10 && gmOutMs > 1e-10)
+        matchGain = juce::jlimit (juce::Decibels::decibelsToGain (-24.0f), juce::Decibels::decibelsToGain (24.0f),
+                                  (float) std::sqrt (gmInMs / gmOutMs));
+
+    gainMatchDb.store (juce::Decibels::gainToDecibels (matchGain));
+    gainMatchGain.setTargetValue (matchGain);
+    gainMatchGain.applyGain (buffer, numSamples);
+}
+
+double MasteringProcessor::averageKWeighted (const juce::AudioBuffer<float>& buffer, std::array<Biquad, 2>& shelf,
+                                             std::array<Biquad, 2>& highPass, double meanSquare) const
+{
+    const int numCh = juce::jmin (2, buffer.getNumChannels());
+
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        double sq = 0.0;
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            const double y = highPass[(size_t) ch].process (shelf[(size_t) ch].process (buffer.getSample (ch, i)));
+            sq += y * y;
+        }
+        meanSquare = gmCoef * meanSquare + (1.0 - gmCoef) * sq;
+    }
+
+    return meanSquare;
+}
+
+void MasteringProcessor::processDeEsser (juce::AudioBuffer<float>& buffer)
+{
+    const float amount = prm.deessAmount->load() * 0.01f;
+
+    if (amount <= 0.0f || buffer.getNumChannels() < 2)
+    {
+        deessActive = false;
+        deessReductionDb.store (0.0f);
+        return;
+    }
+
+    if (! deessActive)
+    {
+        deessLow.reset();
+        deessHigh.reset();
+        deessEnvHigh = deessEnvFull = 0.0f;
+        deessActive = true;
+    }
+
+    const float freq = prm.deessFreq->load();
+    if (freq != deessLow.getCutoffFrequency())
+    {
+        deessLow.setCutoffFrequency (freq);
+        deessHigh.setCutoffFrequency (freq);
+    }
+
+    // The more "Dé-esseur", the lower the threshold (high band vs full band) and the deeper the cut
+    const float thresholdDb    = juce::jmap (amount, -3.0f, -15.0f);
+    const float maxReductionDb = 12.0f * amount;
+    float maxGr = 0.0f;
+
+    auto* l = buffer.getWritePointer (0);
+    auto* r = buffer.getWritePointer (1);
+
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        const float lowL = deessLow.processSample (0, l[i]),  highL = deessHigh.processSample (0, l[i]);
+        const float lowR = deessLow.processSample (1, r[i]),  highR = deessHigh.processSample (1, r[i]);
+
+        // Stereo-linked envelopes: fast attack (1 ms), release 60 ms
+        const float inHigh = juce::jmax (std::abs (highL), std::abs (highR));
+        const float inFull = juce::jmax (std::abs (l[i]), std::abs (r[i]));
+        deessEnvHigh += (inHigh > deessEnvHigh ? deessAttack : deessRelease) * (inHigh - deessEnvHigh);
+        deessEnvFull += (inFull > deessEnvFull ? deessAttack : deessRelease) * (inFull - deessEnvFull);
+
+        float grDb = 0.0f;
+        if (deessEnvFull > 1.0e-4f)
+        {
+            const float over = juce::Decibels::gainToDecibels (deessEnvHigh / deessEnvFull, -100.0f) - thresholdDb;
+            grDb = juce::jlimit (0.0f, maxReductionDb, over * 0.75f);          // ratio 4:1
+        }
+
+        const float g = juce::Decibels::decibelsToGain (-grDb);
+        l[i] = lowL + highL * g;
+        r[i] = lowR + highR * g;
+        maxGr = juce::jmax (maxGr, grDb);
+    }
+
+    deessReductionDb.store (maxGr);
 }
 
 void MasteringProcessor::measureLoudness (juce::AudioBuffer<float>& buffer)

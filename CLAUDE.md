@@ -23,6 +23,11 @@ Il résume l'historique du projet et les décisions prises, pour reprendre le tr
 - Algorithme LUFS vérifié hors du plugin avec le signal de référence EBU (sinus 1 kHz à -23 dBFS en stéréo → -23,0 LUFS).
 - Fenêtre : 760 × 740.
 
+### Octobre 2026 — plan « comme LANDR » (étapes A à D, une PR par étape)
+- Ordre validé par l'utilisateur : A dé-esseur + Gain Match → B styles (Chaud, Équilibré, Ouvert) + Intensité → C bouton Analyser (règles, pas d'IA : spectre vs courbe de référence + LUFS vs cible) → D vues « Simple » / « Avancé ».
+- A (branche `deesseur`) : dé-esseur à bande séparée (Linkwitz-Riley, détection haute bande / pleine bande, ratio 4:1) après l'égaliseur ; Gain Match en sortie (K-weighting, moyenne ~3 s, ±24 dB), appliqué après les mesures et figé pendant Contourner. Nouveaux paramètres ajoutés en fin de liste : `deessAmount`, `deessFreq`, `gainMatch`.
+- La liste des plateformes (cible LUFS) ne change pas le son : elle n'agira qu'avec le bouton Analyser (étape C).
+
 ## Pro Tools (AAX) — en attente de l'utilisateur
 - Pro Tools n'accepte que l'AAX : non compilé pour l'instant.
 - Étapes côté utilisateur : 1) compte développeur sur developer.avid.com/aax et téléchargement du SDK AAX ; 2) code d'activation Pro Tools Developer via devauth@avid.com, pour tester sans signature ; 3) outils de signature PACE via audiosdk@avid.com (objet « PACE Eden Signing Tools Request »), plus un iLok.

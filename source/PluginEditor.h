@@ -33,8 +33,10 @@ private:
     MasteringProcessor& proc;
     std::vector<std::unique_ptr<Knob>> knobs;
 
-    juce::ToggleButton bypass { "Bypass" };
-    std::unique_ptr<ButtonAttachment> bypassAttach;
+    juce::ToggleButton bypass { "Bypass" }, gainMatch { "Gain Match" };
+    std::unique_ptr<ButtonAttachment> bypassAttach, gainMatchAttach;
+    float deessGr = 0.0f, matchDb = 0.0f;
+    juce::TooltipWindow tooltips { this };
 
     juce::ComboBox targetBox;
     std::unique_ptr<ComboAttachment> targetAttach;
@@ -43,7 +45,7 @@ private:
           lufsI = MasteringProcessor::noLoudness, truePeak = MasteringProcessor::noLoudness;
 
     float dbL = -100.f, dbR = -100.f;
-    juce::Rectangle<int> gridArea, meterArea, spectrumArea, loudnessArea;
+    juce::Rectangle<int> gridArea, meterArea, spectrumArea, loudnessArea, gainMatchInfo;
 
     // Spectrum analyser
     static constexpr int fftSize = MasteringProcessor::fftSize;

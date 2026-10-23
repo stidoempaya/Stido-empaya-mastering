@@ -3,7 +3,7 @@
 namespace
 {
     constexpr int kCols = 5;
-    constexpr int kRows = 3;
+    constexpr int kRows = 4;
     const juce::Colour bg      { 0xff14161a };
     const juce::Colour panel   { 0xff1d2026 };
     const juce::Colour accent  { 0xff4fc3f7 };
@@ -48,11 +48,22 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     addKnob ("limRelease", fr ("Relâch. limiteur"));
     addKnob ("outGain",    fr ("Sortie"));
 
+    // Rangée 4 : dé-esseur
+    addKnob ("deessAmount", fr ("Quantité"));
+    addKnob ("deessFreq",   fr ("Fréquence"));
+
     addAndMakeVisible (bypass);
     bypass.setButtonText (fr ("Contourner"));
     bypass.setColour (juce::ToggleButton::textColourId, textCol);
     bypass.setColour (juce::ToggleButton::tickColourId, accent);
     bypassAttach = std::make_unique<ButtonAttachment> (proc.apvts, "bypass", bypass);
+
+    addAndMakeVisible (gainMatch);
+    gainMatch.setColour (juce::ToggleButton::textColourId, textCol);
+    gainMatch.setColour (juce::ToggleButton::tickColourId, accent);
+    gainMatch.setTooltip (fr ("Écoute le master au même volume que l'original, pour comparer avec Contourner. "
+                              "Les mesures restent celles du master."));
+    gainMatchAttach = std::make_unique<ButtonAttachment> (proc.apvts, "gainMatch", gainMatch);
 
     // Loudness: target platform + reset of the integrated measurement
     int itemId = 1;
@@ -73,7 +84,7 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     targetDb.fill (minDb);
     spectrumDb.fill (minDb);
 
-    setSize (760, 740);
+    setSize (760, 780);
     startTimerHz (30);
 }
 
@@ -105,6 +116,8 @@ void MasteringEditor::resized()
 
     auto header = area.removeFromTop (36);
     bypass.setBounds (header.removeFromRight (90));
+    gainMatch.setBounds (header.removeFromRight (100));
+    gainMatchInfo = header.removeFromRight (70);
 
     auto top = area.removeFromTop (200);
     loudnessArea = top.removeFromRight (220).reduced (2, 3);
@@ -141,7 +154,7 @@ void MasteringEditor::paint (juce::Graphics& g)
     g.drawText ("STIDO EMPAYA MASTERING", 16, 14, 400, 30, juce::Justification::centredLeft);
 
     // Section panels + titles
-    const char* titles[kRows] = { "ENTRÉE / ÉGALISEUR", "COMPRESSEUR", "STÉRÉO / LIMITEUR / SORTIE" };
+    const char* titles[kRows] = { "ENTRÉE / ÉGALISEUR", "COMPRESSEUR", "STÉRÉO / LIMITEUR / SORTIE", "DÉ-ESSEUR" };
     for (int r = 0; r < kRows; ++r)
     {
         auto row = juce::Rectangle<int> (gridArea.getX(), gridArea.getY() + r * rowH,
@@ -152,6 +165,28 @@ void MasteringEditor::paint (juce::Graphics& g)
         g.setColour (accent);
         g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         g.drawText (fr (titles[r]), row.getX() + 10, row.getY() + 4, 300, 14, juce::Justification::centredLeft);
+    }
+
+    // De-esser activity, to the right of its two knobs
+    {
+        const auto row = juce::Rectangle<int> (gridArea.getX(), gridArea.getY() + 3 * rowH, gridArea.getWidth(), rowH);
+        const auto info = row.withTrimmedLeft (2 * gridArea.getWidth() / kCols + 20).reduced (10, 0);
+        const bool on = proc.apvts.getRawParameterValue ("deessAmount")->load() > 0.0f;
+
+        g.setFont (juce::FontOptions (13.0f));
+        g.setColour (on ? (deessGr > 0.1f ? eqCol : textCol) : textCol.withAlpha (0.5f));
+        g.drawText (on ? fr ("Réduction des « s » : -") + juce::String (deessGr, 1) + " dB"
+                       : fr ("Désactivé (montez Quantité pour adoucir les « s »)"),
+                    info, juce::Justification::centredLeft);
+    }
+
+    // Gain match correction, next to its button
+    if (gainMatch.getToggleState() && ! bypass.getToggleState())
+    {
+        g.setColour (accent);
+        g.setFont (juce::FontOptions (12.0f));
+        g.drawText ((matchDb >= 0.0f ? "+" : "") + juce::String (matchDb, 1) + " dB", gainMatchInfo,
+                    juce::Justification::centredRight);
     }
 
     drawSpectrum (g);
@@ -207,6 +242,11 @@ void MasteringEditor::timerCallback()
         spectrumDb[(size_t) i] = juce::jmax (targetDb[(size_t) i], spectrumDb[(size_t) i] - 1.2f);
 
     repaint (spectrumArea);
+
+    deessGr = juce::jmax (proc.deessReductionDb.exchange (0.0f), deessGr - 0.5f);
+    matchDb = proc.gainMatchDb.load();
+    repaint (gridArea.withTrimmedTop (3 * rowH));
+    repaint (gainMatchInfo);
 
     lufsM    = proc.momentaryLufs.load();
     lufsS    = proc.shortTermLufs.load();

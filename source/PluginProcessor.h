@@ -59,6 +59,9 @@ public:
                        integratedLufs { noLoudness }, truePeakDb { noLoudness };
     std::atomic<bool> loudnessResetRequested { false };
 
+    // De-esser gain reduction (dB, positive) and gain match correction (dB), for display
+    std::atomic<float> deessReductionDb { 0.0f }, gainMatchDb { 0.0f };
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void updateDSP();
@@ -66,6 +69,7 @@ private:
     void measureLoudness (juce::AudioBuffer<float>&);
     void endLoudnessSubBlock();
     void resetLoudness();
+    void processDeEsser (juce::AudioBuffer<float>&);
 
     using Filter  = juce::dsp::IIR::Filter<float>;
     using Coeffs  = juce::dsp::IIR::Coefficients<float>;
@@ -81,7 +85,8 @@ private:
     {
         std::atomic<float> *inGain, *lowGain, *midGain, *midFreq, *highGain,
                            *compThresh, *compRatio, *compAttack, *compRelease, *compMakeup,
-                           *width, *drive, *ceiling, *limRelease, *outGain, *bypass;
+                           *width, *drive, *ceiling, *limRelease, *outGain, *bypass,
+                           *deessAmount, *deessFreq, *gainMatch;
     } prm {};
 
     struct Cache { float low = 1e9f, mid = 1e9f, midFreq = 1e9f, high = 1e9f; } cache;
@@ -103,6 +108,7 @@ private:
         }
     };
     std::array<Biquad, 2> kShelf, kHighPass;
+    Biquad kShelfProto, kHighPassProto;
 
     // 100 ms sub-blocks: 4 make a 400 ms (momentary) block, 30 make 3 s (short-term)
     static constexpr int numSubBlocks = 30;
@@ -117,6 +123,18 @@ private:
 
     juce::dsp::Oversampling<float> truePeakOversampler { 2, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, false };
     int maxBlockSize = 0;
+
+    // De-esser: the band above deessFreq is turned down when it gets too close to the full-band level
+    juce::dsp::LinkwitzRileyFilter<float> deessLow, deessHigh;
+    float deessEnvHigh = 0.0f, deessEnvFull = 0.0f, deessAttack = 0.0f, deessRelease = 0.0f;
+    bool deessActive = false;
+
+    // Gain match: output turned down/up to the input loudness (K-weighted, ~3 s average)
+    std::array<Biquad, 2> gmInShelf, gmInHighPass, gmOutShelf, gmOutHighPass;
+    double gmInMs = 0.0, gmOutMs = 0.0, gmCoef = 0.0;
+    juce::SmoothedValue<float> gainMatchGain { 1.0f };
+    double averageKWeighted (const juce::AudioBuffer<float>&, std::array<Biquad, 2>& shelf,
+                             std::array<Biquad, 2>& highPass, double meanSquare) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MasteringProcessor)
 };

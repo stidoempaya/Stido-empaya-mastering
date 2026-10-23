@@ -40,7 +40,8 @@ private:
 
     juce::ComboBox targetBox;
     std::unique_ptr<ComboAttachment> targetAttach;
-    juce::TextButton resetLoudness;
+    juce::TextButton resetLoudness, normaliseButton;
+    void normalise();
 
     // Style / intensity shortcuts
     std::array<juce::TextButton, 3> styleButtons, intensityButtons;

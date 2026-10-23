@@ -81,6 +81,14 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     resetLoudness.onClick = [this] { proc.loudnessResetRequested.store (true); };
     addAndMakeVisible (resetLoudness);
 
+    normaliseButton.setButtonText ("Normaliser");
+    normaliseButton.setColour (juce::TextButton::buttonColourId, accent);
+    normaliseButton.setColour (juce::TextButton::textColourOffId, bg);
+    normaliseButton.setTooltip (fr ("Après avoir joué le morceau en entier : calcule le gain final à partir du LUFS intégré "
+                                    "mesuré, sans dépasser le plafond true peak du profil."));
+    normaliseButton.onClick = [this] { normalise(); };
+    addAndMakeVisible (normaliseButton);
+
     // Styles (tone) and intensities (level): one click sets several knobs
     auto setupGroup = [this] (std::array<juce::TextButton, 3>& buttons, const char* const* names, int group,
                               std::function<void (int)> apply)
@@ -120,7 +128,7 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     targetDb.fill (minDb);
     spectrumDb.fill (minDb);
 
-    setSize (760, 780);
+    setSize (760, 800);
     startTimerHz (30);
 }
 
@@ -157,7 +165,7 @@ void MasteringEditor::resized()
     header.removeFromRight (10);
     analyseButton.setBounds (header.removeFromRight (140).reduced (0, 4));
 
-    auto top = area.removeFromTop (200);
+    auto top = area.removeFromTop (220);
     loudnessArea = top.removeFromRight (220).reduced (2, 3);
     spectrumArea = top.withTrimmedRight (4).reduced (2, 3);
     area.removeFromTop (6);
@@ -179,7 +187,9 @@ void MasteringEditor::resized()
     auto l = loudnessArea.reduced (10, 6);
     l.removeFromTop (18);
     targetBox.setBounds (l.removeFromTop (22));
-    resetLoudness.setBounds (l.removeFromBottom (20).removeFromRight (100));
+    auto buttons = l.removeFromBottom (20);
+    normaliseButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).withTrimmedRight (3));
+    resetLoudness.setBounds (buttons.withTrimmedLeft (3));
 
     meterArea = area.removeFromRight (70).reduced (10, 24);
     gridArea  = area.withTrimmedTop (8);
@@ -377,10 +387,12 @@ void MasteringEditor::drawLoudness (juce::Graphics& g)
         g.drawText (value, lr, juce::Justification::centredRight);
     };
 
-    const auto tpCol = ! valid (truePeak) ? textCol : truePeak > MasteringProcessor::truePeakTarget ? badCol : okCol;
+    const float norm = proc.getParameterValue ("normGain");
+    const auto tpCol = ! valid (truePeak) ? textCol : truePeak > target.truePeak ? badCol : okCol;
     line (fr ("Court terme (3 s)"), fmt (lufsS, " LUFS"), textCol);
     line (fr ("Momentané (400 ms)"), fmt (lufsM, " LUFS"), textCol);
-    line ("True peak (max)", fmt (truePeak, " dBTP"), tpCol);
+    line ("True peak (max)", fmt (truePeak, " dBTP") + fr (" / ") + juce::String (target.truePeak, 0), tpCol);
+    line ("Normalisation", (norm > 0.0f ? "+" : "") + juce::String (norm, 1) + " dB", norm != 0.0f ? accent : textCol);
 
     // Advice
     r.removeFromTop (4);
@@ -399,13 +411,13 @@ void MasteringEditor::drawLoudness (juce::Graphics& g)
     else
     {
         advice = fr (diff < 0.0f ? "Trop faible de " : "Trop fort de ") + juce::String (std::abs (diff), 1)
-               + fr (diff < 0.0f ? " LU : montez la Poussée." : " LU : baissez la Poussée.");
+               + fr (" LU : cliquez sur Normaliser.");
         adviceCol = warnCol;
     }
 
-    if (valid (truePeak) && truePeak > MasteringProcessor::truePeakTarget)
+    if (valid (truePeak) && truePeak > target.truePeak)
     {
-        advice += fr ("\nTrue peak > -1 dBTP : baissez le Plafond.");
+        advice += fr ("\nTrue peak au-dessus du plafond : cliquez sur Normaliser.");
         adviceCol = badCol;
     }
 
@@ -422,7 +434,7 @@ void MasteringEditor::drawLoudness (juce::Graphics& g)
 
     g.setColour (adviceCol);
     g.setFont (juce::FontOptions (11.0f));
-    g.drawFittedText (advice, r.withTrimmedBottom (22), juce::Justification::topLeft, 3);
+    g.drawFittedText (advice, r.withTrimmedBottom (22), juce::Justification::topLeft, 2);
 }
 
 void MasteringEditor::updateSpectrum()
@@ -591,6 +603,7 @@ void MasteringEditor::startAnalysis()
     phaseStartMs = juce::Time::getMillisecondCounterHiRes();
 
     proc.setParameter ("bypass", 0.0f);
+    proc.setParameter ("normGain", 0.0f);                   // the analysis sets the engine; normalisation comes after
     proc.analyseInput.store (true);
 }
 
@@ -673,9 +686,10 @@ void MasteringEditor::updateAnalysis()
 
     // True peak above -1 dBTP: lower the ceiling (down to -3 dB)
     const float truePeak = proc.truePeakDb.load();
-    if (truePeak > MasteringProcessor::truePeakTarget)
-        proc.setParameter ("ceiling", juce::jlimit (-3.0f, -1.0f, proc.getParameterValue ("ceiling")
-                                                                   - (truePeak - MasteringProcessor::truePeakTarget) - 0.2f));
+    const float tpCeiling = currentTarget().truePeak;
+    if (truePeak > tpCeiling)
+        proc.setParameter ("ceiling", juce::jlimit (tpCeiling - 2.0f, tpCeiling, proc.getParameterValue ("ceiling")
+                                                                                 - (truePeak - tpCeiling) - 0.2f));
 
     const float error = currentTarget().lufs - shortTerm;
 
@@ -705,4 +719,49 @@ void MasteringEditor::updateAnalysis()
 
     proc.loudnessResetRequested.store (true);
     windowStartMs = now;
+}
+
+void MasteringEditor::normalise()
+{
+    // Final gain from the integrated loudness really measured on the output (normalisation included),
+    // capped so that the true peak stays under the profile ceiling
+    const auto& target = currentTarget();
+    const float measured = proc.integratedLufs.load();
+    const float peak = proc.truePeakDb.load();
+    const float current = proc.getParameterValue ("normGain");
+
+    auto show = [this] (const juce::String& msg)
+    {
+        analysisMessage = msg;
+        messageUntilMs = juce::Time::getMillisecondCounterHiRes() + 15000.0;
+    };
+    auto db = [] (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1); };
+
+    if (measured <= -70.0f || peak <= -70.0f)
+    {
+        show (fr ("Jouez d'abord le morceau en entier (après Réinitialiser), puis cliquez sur Normaliser."));
+        return;
+    }
+
+    const float wanted = target.lufs - measured;
+    const float headroom = target.truePeak - peak;
+
+    if (std::abs (wanted) < 0.3f && headroom >= 0.0f)
+    {
+        show (fr ("Déjà à la cible (") + juce::String (measured, 1) + fr (" LUFS) : aucune normalisation nécessaire."));
+        return;
+    }
+
+    const float delta = juce::jmin (wanted, headroom);
+    const float newGain = juce::jlimit (-12.0f, 12.0f, current + delta);
+    proc.setParameter ("normGain", newGain);
+    proc.loudnessResetRequested.store (true);              // measure again with the new gain
+
+    juce::String msg = fr ("Normalisation ") + db (newGain) + fr (" dB (mesuré ") + juce::String (measured, 1)
+                     + fr (", cible ") + juce::String (target.lufs, 0) + fr (").");
+    if (headroom < wanted)
+        msg += fr (" Limitée par le true peak : montez la Poussée.");
+    else
+        msg += fr (" Rejouez le morceau pour vérifier.");
+    show (msg);
 }

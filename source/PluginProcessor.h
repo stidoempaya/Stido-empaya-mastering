@@ -3,7 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
-struct LoudnessTarget { const char* name; float lufs; };
+// Platform profile: integrated loudness target and true peak ceiling
+struct LoudnessTarget { const char* name; float lufs, truePeak; };
 
 class MasteringProcessor : public juce::AudioProcessor
 {
@@ -50,9 +51,8 @@ public:
 
     // Loudness (ITU-R BS.1770 / EBU R128), measured on the output. "No value" = below -70.
     static constexpr LoudnessTarget loudnessTargets[] = {
-        { "Apple Music", -16.0f }, { "Spotify", -14.0f }, { "YouTube", -14.0f },
-        { "Deezer", -15.0f }, { "Tidal", -14.0f }, { "Amazon Music", -14.0f } };
-    static constexpr float truePeakTarget = -1.0f;
+        { "Apple Music", -16.0f, -1.0f }, { "Spotify", -14.0f, -1.0f }, { "YouTube", -14.0f, -1.0f },
+        { "Deezer", -15.0f, -1.0f }, { "Tidal", -14.0f, -1.0f }, { "Amazon Music", -14.0f, -2.0f } };
     static constexpr float noLoudness = -100.0f;
 
     std::atomic<float> momentaryLufs { noLoudness }, shortTermLufs { noLoudness },
@@ -95,7 +95,7 @@ private:
     using Duplex  = juce::dsp::ProcessorDuplicator<Filter, Coeffs>;
 
     // Chain: input -> EQ -> compressor -> makeup -> width -> drive -> limiter -> output
-    juce::dsp::Gain<float> inGain, makeup, drive, outGain;
+    juce::dsp::Gain<float> inGain, makeup, drive, outGain, normGain;
     Duplex lowShelf, midPeak, highShelf;
     juce::dsp::Compressor<float> compressor;
     juce::dsp::Limiter<float> limiter;
@@ -105,7 +105,7 @@ private:
         std::atomic<float> *inGain, *lowGain, *midGain, *midFreq, *highGain,
                            *compThresh, *compRatio, *compAttack, *compRelease, *compMakeup,
                            *width, *drive, *ceiling, *limRelease, *outGain, *bypass,
-                           *deessAmount, *deessFreq, *gainMatch;
+                           *deessAmount, *deessFreq, *gainMatch, *normGain;
     } prm {};
 
     struct Cache { float low = 1e9f, mid = 1e9f, midFreq = 1e9f, high = 1e9f; } cache;

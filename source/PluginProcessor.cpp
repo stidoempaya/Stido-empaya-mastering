@@ -51,6 +51,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout MasteringProcessor::createLa
     add ("deessFreq",   "Fréq. dé-esseur", R (3000.f, 12000.f, 1.f, 0.5f), 6500.f, "Hz");
     layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "gainMatch", 1 },
                                                             "Gain Match", false));
+
+    // Normalisation : gain final fixe, calculé par le bouton « Normaliser » depuis le LUFS intégré mesuré
+    add ("normGain", "Normalisation", R (-12.f, 12.f, 0.1f), 0.f, "dB");
     return layout;
 }
 
@@ -67,7 +70,7 @@ MasteringProcessor::MasteringProcessor()
             get ("compThresh"), get ("compRatio"), get ("compAttack"), get ("compRelease"),
             get ("compMakeup"), get ("width"), get ("drive"), get ("ceiling"),
             get ("limRelease"), get ("outGain"), get ("bypass"),
-            get ("deessAmount"), get ("deessFreq"), get ("gainMatch") };
+            get ("deessAmount"), get ("deessFreq"), get ("gainMatch"), get ("normGain") };
 }
 
 bool MasteringProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -82,7 +85,7 @@ void MasteringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
                                   (juce::uint32) samplesPerBlock,
                                   (juce::uint32) getTotalNumOutputChannels() };
 
-    for (auto* g : { &inGain, &makeup, &drive, &outGain })
+    for (auto* g : { &inGain, &makeup, &drive, &outGain, &normGain })
     {
         g->prepare (spec);
         g->setRampDurationSeconds (0.05);
@@ -208,6 +211,7 @@ void MasteringProcessor::updateDSP()
     makeup.setGainDecibels  (prm.compMakeup->load());
     drive.setGainDecibels   (prm.drive->load());
     outGain.setGainDecibels (prm.outGain->load());
+    normGain.setGainDecibels (prm.normGain->load());
 
     compressor.setThreshold (prm.compThresh->load());
     compressor.setRatio     (prm.compRatio->load());
@@ -268,6 +272,7 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         drive.process (ctx);
         limiter.process (ctx);
         outGain.process (ctx);
+        normGain.process (ctx);           // final level (normalisation), measured by the meters below
 
         gmOutMs = averageKWeighted (buffer, gmOutShelf, gmOutHighPass, gmOutMs);
     }

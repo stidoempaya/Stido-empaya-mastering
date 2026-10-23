@@ -8,7 +8,9 @@ Chaîne de mastering stéréo :
 
 Un indicateur de crête L/R et un bouton Bypass sont inclus, ainsi que :
 - un **analyseur de spectre** du son en sortie, avec la courbe de l'égaliseur superposée ;
-- un **indicateur de loudness** (norme ITU-R BS.1770 / EBU R128) : LUFS intégré, court terme, momentané et true peak, avec la cible de la plateforme choisie (Apple Music -16 LUFS, Spotify -14, YouTube -14, Deezer -15, Tidal -14, Amazon Music -14 ; true peak -1 dBTP) et un conseil de réglage. Tous les paramètres sont automatisables et sauvegardés avec le projet.
+- un **indicateur de loudness** (norme ITU-R BS.1770 / EBU R128) : LUFS intégré, court terme, momentané et true peak, avec la cible de la plateforme choisie (Apple Music -16 LUFS, Spotify -14, YouTube -14, Deezer -15, Tidal -14, Amazon Music -14 ; true peak -1 dBTP) et un conseil de réglage.
+
+Tous les paramètres sont automatisables et sauvegardés avec le projet.
 
 ## Prérequis
 - CMake ≥ 3.22

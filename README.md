@@ -31,6 +31,8 @@ Une version Standalone est aussi générée pour tester sans DAW.
 4. Dans l'archive : `VST3/STIDO Empaya Mastering.vst3` et `Standalone/`.
 
 Installation : copie le `.vst3` dans `C:\Program Files\Common Files\VST3` (Windows) ou `~/Library/Audio/Plug-Ins/VST3` (macOS).
+Compatibilité Mac : binaire universel, de **macOS 10.13 High Sierra** à la dernière version sur les Mac Intel, et à partir de **macOS 11 Big Sur** sur les Mac Apple Silicon (M1, M2, M3, M4…).
+
 Le format AAX n'est pas compilé ici : il exige le SDK privé d'Avid, à utiliser sur ta machine.
 
 ## Pro Tools (AAX)

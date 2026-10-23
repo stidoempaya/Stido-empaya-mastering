@@ -10,6 +10,9 @@ namespace
     const juce::Colour textCol { 0xffd7dbe0 };
     const juce::Colour eqCol   { 0xffffb74d };
     const juce::Colour gridCol { 0xff2c313a };
+    const juce::Colour okCol   { 0xff81c784 };
+    const juce::Colour warnCol { 0xffffb74d };
+    const juce::Colour badCol  { 0xffef5350 };
 
     constexpr float minFreq = 20.0f, maxFreq = 20000.0f;
     constexpr float minDb = -90.0f, eqRangeDb = 18.0f;
@@ -51,10 +54,26 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     bypass.setColour (juce::ToggleButton::tickColourId, accent);
     bypassAttach = std::make_unique<ButtonAttachment> (proc.apvts, "bypass", bypass);
 
+    // Loudness: target platform + reset of the integrated measurement
+    int itemId = 1;
+    for (const auto& t : MasteringProcessor::loudnessTargets)
+        targetBox.addItem (juce::String (t.name) + "  (" + juce::String ((int) t.lufs) + " LUFS)", itemId++);
+    targetBox.setColour (juce::ComboBox::backgroundColourId, bg);
+    targetBox.setColour (juce::ComboBox::textColourId, textCol);
+    targetBox.setColour (juce::ComboBox::outlineColourId, gridCol);
+    addAndMakeVisible (targetBox);
+    targetAttach = std::make_unique<ComboAttachment> (proc.apvts, "target", targetBox);
+
+    resetLoudness.setButtonText (fr ("Réinitialiser"));
+    resetLoudness.setColour (juce::TextButton::buttonColourId, bg);
+    resetLoudness.setColour (juce::TextButton::textColourOffId, textCol);
+    resetLoudness.onClick = [this] { proc.loudnessResetRequested.store (true); };
+    addAndMakeVisible (resetLoudness);
+
     targetDb.fill (minDb);
     spectrumDb.fill (minDb);
 
-    setSize (760, 720);
+    setSize (760, 740);
     startTimerHz (30);
 }
 
@@ -87,8 +106,15 @@ void MasteringEditor::resized()
     auto header = area.removeFromTop (36);
     bypass.setBounds (header.removeFromRight (90));
 
-    spectrumArea = area.removeFromTop (180).reduced (2, 3);
+    auto top = area.removeFromTop (200);
+    loudnessArea = top.removeFromRight (220).reduced (2, 3);
+    spectrumArea = top.withTrimmedRight (4).reduced (2, 3);
     area.removeFromTop (6);
+
+    auto l = loudnessArea.reduced (10, 6);
+    l.removeFromTop (18);
+    targetBox.setBounds (l.removeFromTop (22));
+    resetLoudness.setBounds (l.removeFromBottom (20).removeFromRight (100));
 
     meterArea = area.removeFromRight (70).reduced (10, 24);
     gridArea  = area.withTrimmedTop (8);
@@ -129,6 +155,7 @@ void MasteringEditor::paint (juce::Graphics& g)
     }
 
     drawSpectrum (g);
+    drawLoudness (g);
 
     // Peak meters (-60 .. 0 dB)
     auto drawBar = [&] (juce::Rectangle<int> r, float db)
@@ -180,6 +207,87 @@ void MasteringEditor::timerCallback()
         spectrumDb[(size_t) i] = juce::jmax (targetDb[(size_t) i], spectrumDb[(size_t) i] - 1.2f);
 
     repaint (spectrumArea);
+
+    lufsM    = proc.momentaryLufs.load();
+    lufsS    = proc.shortTermLufs.load();
+    lufsI    = proc.integratedLufs.load();
+    truePeak = proc.truePeakDb.load();
+    repaint (loudnessArea);
+}
+
+void MasteringEditor::drawLoudness (juce::Graphics& g)
+{
+    g.setColour (panel);
+    g.fillRoundedRectangle (loudnessArea.toFloat(), 8.0f);
+
+    const auto& target = MasteringProcessor::loudnessTargets[juce::jlimit (0, (int) std::size (MasteringProcessor::loudnessTargets) - 1,
+                                                                         targetBox.getSelectedItemIndex())];
+    auto valid = [] (float v) { return v > -70.0f; };
+    auto fmt = [&] (float v, const char* unit) { return valid (v) ? juce::String (v, 1) + unit : juce::String (fr ("—")); };
+
+    auto r = loudnessArea.reduced (10, 6);
+    g.setColour (accent);
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText ("LOUDNESS", r.removeFromTop (18), juce::Justification::centredLeft);
+    r.removeFromTop (26);                                  // target combo box
+
+    // Integrated loudness, coloured by distance to the target
+    const float diff = lufsI - target.lufs;
+    const auto lufsCol = ! valid (lufsI) ? textCol : std::abs (diff) <= 1.0f ? okCol : warnCol;
+
+    auto row = r.removeFromTop (30);
+    g.setColour (textCol.withAlpha (0.7f));
+    g.setFont (juce::FontOptions (11.0f));
+    g.drawText (fr ("Intégré"), row.removeFromLeft (60), juce::Justification::centredLeft);
+    g.setColour (lufsCol);
+    g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
+    g.drawText (fmt (lufsI, " LUFS"), row, juce::Justification::centredRight);
+
+    auto line = [&] (const juce::String& name, const juce::String& value, juce::Colour col)
+    {
+        auto lr = r.removeFromTop (16);
+        g.setFont (juce::FontOptions (11.0f));
+        g.setColour (textCol.withAlpha (0.7f));
+        g.drawText (name, lr, juce::Justification::centredLeft);
+        g.setColour (col);
+        g.drawText (value, lr, juce::Justification::centredRight);
+    };
+
+    const auto tpCol = ! valid (truePeak) ? textCol : truePeak > MasteringProcessor::truePeakTarget ? badCol : okCol;
+    line (fr ("Court terme (3 s)"), fmt (lufsS, " LUFS"), textCol);
+    line (fr ("Momentané (400 ms)"), fmt (lufsM, " LUFS"), textCol);
+    line ("True peak (max)", fmt (truePeak, " dBTP"), tpCol);
+
+    // Advice
+    r.removeFromTop (4);
+    juce::String advice;
+    juce::Colour adviceCol = textCol.withAlpha (0.7f);
+
+    if (! valid (lufsI))
+    {
+        advice = fr ("Lancez la lecture du morceau en entier.");
+    }
+    else if (std::abs (diff) <= 1.0f)
+    {
+        advice = fr ("Niveau idéal pour ") + juce::String (target.name) + ".";
+        adviceCol = okCol;
+    }
+    else
+    {
+        advice = fr (diff < 0.0f ? "Trop faible de " : "Trop fort de ") + juce::String (std::abs (diff), 1)
+               + fr (diff < 0.0f ? " LU : montez la Poussée." : " LU : baissez la Poussée.");
+        adviceCol = warnCol;
+    }
+
+    if (valid (truePeak) && truePeak > MasteringProcessor::truePeakTarget)
+    {
+        advice += fr ("\nTrue peak > -1 dBTP : baissez le Plafond.");
+        adviceCol = badCol;
+    }
+
+    g.setColour (adviceCol);
+    g.setFont (juce::FontOptions (11.0f));
+    g.drawFittedText (advice, r.withTrimmedBottom (22), juce::Justification::topLeft, 3);
 }
 
 void MasteringEditor::updateSpectrum()

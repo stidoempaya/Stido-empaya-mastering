@@ -17,9 +17,11 @@ private:
     void addKnob (const juce::String& paramId, const juce::String& name);
     void updateSpectrum();
     void drawSpectrum (juce::Graphics&);
+    void drawLoudness (juce::Graphics&);
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     struct Knob
     {
@@ -34,8 +36,14 @@ private:
     juce::ToggleButton bypass { "Bypass" };
     std::unique_ptr<ButtonAttachment> bypassAttach;
 
+    juce::ComboBox targetBox;
+    std::unique_ptr<ComboAttachment> targetAttach;
+    juce::TextButton resetLoudness;
+    float lufsM = MasteringProcessor::noLoudness, lufsS = MasteringProcessor::noLoudness,
+          lufsI = MasteringProcessor::noLoudness, truePeak = MasteringProcessor::noLoudness;
+
     float dbL = -100.f, dbR = -100.f;
-    juce::Rectangle<int> gridArea, meterArea, spectrumArea;
+    juce::Rectangle<int> gridArea, meterArea, spectrumArea, loudnessArea;
 
     // Spectrum analyser
     static constexpr int fftSize = MasteringProcessor::fftSize;

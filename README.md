@@ -6,7 +6,9 @@ Chaîne de mastering stéréo :
 
 **Input → EQ (shelf grave 100 Hz, cloche médium réglable, shelf aigu 8 kHz) → Compresseur "glue" → Makeup → Width (Mid/Side) → Drive → Limiteur (ceiling) → Output**
 
-Un indicateur de crête L/R et un bouton Bypass sont inclus. Tous les paramètres sont automatisables et sauvegardés avec le projet.
+Un indicateur de crête L/R et un bouton Bypass sont inclus, ainsi que :
+- un **analyseur de spectre** du son en sortie, avec la courbe de l'égaliseur superposée ;
+- un **indicateur de loudness** (norme ITU-R BS.1770 / EBU R128) : LUFS intégré, court terme, momentané et true peak, avec la cible de la plateforme choisie (Apple Music -16 LUFS, Spotify -14, YouTube -14, Deezer -15, Tidal -14, Amazon Music -14 ; true peak -1 dBTP) et un conseil de réglage. Tous les paramètres sont automatisables et sauvegardés avec le projet.
 
 ## Prérequis
 - CMake ≥ 3.22
@@ -50,6 +52,4 @@ cmake --build build --config Release
 
 ## Pistes d'amélioration
 - Compresseur multibande (ajouter `juce::dsp::LinkwitzRileyFilter`)
-- Mesure LUFS (filtre K-weighting + intégration 400 ms / 3 s)
 - Limiteur avec lookahead et détection true-peak (suréchantillonnage via `juce::dsp::Oversampling`)
-- Analyseur de spectre (FFT) dans l'éditeur

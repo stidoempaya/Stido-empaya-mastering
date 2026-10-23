@@ -14,7 +14,7 @@ public:
 
 private:
     void timerCallback() override;
-    void addKnob (const juce::String& paramId, const juce::String& name);
+    void addKnob (const juce::String& paramId, const juce::String& name, const juce::String& simpleName = {});
     void updateSpectrum();
     void drawSpectrum (juce::Graphics&);
     void drawLoudness (juce::Graphics&);
@@ -27,6 +27,7 @@ private:
     {
         juce::Slider slider;
         juce::Label label;
+        juce::String name, simpleName;        // simpleName empty = hidden in the simple view
         std::unique_ptr<SliderAttachment> attach;
     };
 
@@ -47,6 +48,12 @@ private:
     std::array<juce::TextButton, 3> styleButtons, intensityButtons;
     juce::Rectangle<int> presetArea;
     void refreshPresetButtons();
+
+    // Simple view (like LANDR: Analyser, styles, intensity, loudness, 6 knobs) / advanced view (all knobs).
+    // The choice is saved with the project (apvts.state "view": 1 = simple).
+    juce::TextButton viewButton;
+    bool isSimpleView() const { return (int) proc.apvts.state.getProperty ("view", 1) == 1; }
+    void setSimpleView (bool simple);
 
     // "Analyser": listen to the input (EQ correction), then adjust Poussée to reach the loudness target
     enum class AnalysisPhase { idle, listening, calibrating };

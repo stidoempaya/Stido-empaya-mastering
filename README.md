@@ -12,7 +12,10 @@ Organisation :
 3. la **normalisation** ajuste le niveau final si nécessaire : le bouton « Normaliser » calcule un gain fixe à partir du LUFS intégré réellement mesuré, sans dépasser le plafond true peak du profil ;
 4. le **Gain Match** sert uniquement à comparer à l'oreille le son traité et l'original à volume égal : il ne modifie ni les réglages ni les mesures.
 
+Deux vues : **Simple** (comme LANDR : Analyser, styles, intensité, loudness et 6 réglages essentiels) et **Avancée** (tous les réglages). Le choix est sauvegardé avec le projet.
+
 Un indicateur de crête L/R et un bouton Bypass sont inclus, ainsi que :
+- un **limiteur true peak avec anticipation** (2 ms, détection sur le signal suréchantillonné ×4) : le Plafond est en dBTP ;
 - un **analyseur de spectre** du son en sortie, avec la courbe de l'égaliseur superposée ;
 - un bouton **Analyser** : en jouant le refrain (~20 s), le plugin compare le spectre du morceau à une courbe de référence et corrige l'égaliseur en douceur, puis règle la Poussée pour atteindre la cible LUFS de la plateforme choisie (et baisse le Plafond si le true peak dépasse -1 dBTP) ;
 - des **styles** (Chaud, Équilibré, Ouvert : égaliseur, dé-esseur, largeur, vitesse du compresseur) et une **Intensité** (Faible, Moyenne, Forte : compression, poussée, limiteur), qui règlent plusieurs boutons en un clic, comme LANDR ; tout reste ensuite réglable à la main ;
@@ -44,7 +47,9 @@ Une version Standalone est aussi générée pour tester sans DAW.
 3. Quand elle est terminée, ouvre l'exécution et télécharge **STIDO-Empaya-Mastering-windows-latest** ou **STIDO-Empaya-Mastering-macos-latest** dans la section *Artifacts*.
 4. Dans l'archive : `VST3/STIDO Empaya Mastering.vst3` et `Standalone/`.
 
-Installation : copie le `.vst3` dans `C:\Program Files\Common Files\VST3` (Windows) ou `~/Library/Audio/Plug-Ins/VST3` (macOS).
+Installateurs : **STIDO-Empaya-Mastering-Installer-macOS** (`.dmg`) et **STIDO-Empaya-Mastering-Installer-Windows** (`.exe`, créé avec Inno Setup à partir de `installer/windows.iss`).
+
+Installation manuelle : copie le `.vst3` dans `C:\Program Files\Common Files\VST3` (Windows) ou `~/Library/Audio/Plug-Ins/VST3` (macOS).
 Compatibilité Mac : binaire universel, de **macOS 10.13 High Sierra** à la dernière version sur les Mac Intel, et à partir de **macOS 11 Big Sur** sur les Mac Apple Silicon (M1, M2, M3, M4…).
 
 Le format AAX n'est pas compilé ici : il exige le SDK privé d'Avid, à utiliser sur ta machine.
@@ -64,4 +69,3 @@ cmake --build build --config Release
 
 ## Pistes d'amélioration
 - Compresseur multibande (ajouter `juce::dsp::LinkwitzRileyFilter`)
-- Limiteur avec lookahead et détection true-peak (suréchantillonnage via `juce::dsp::Oversampling`)

@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include "TruePeakLimiter.h"
 
 // Platform profile: integrated loudness target and true peak ceiling
 struct LoudnessTarget { const char* name; float lufs, truePeak; };
@@ -98,7 +99,7 @@ private:
     juce::dsp::Gain<float> inGain, makeup, drive, outGain, normGain;
     Duplex lowShelf, midPeak, highShelf;
     juce::dsp::Compressor<float> compressor;
-    juce::dsp::Limiter<float> limiter;
+    TruePeakLimiter limiter;          // true peak + lookahead: the ceiling ("Plafond") is in dBTP
 
     struct Params
     {

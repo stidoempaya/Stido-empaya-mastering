@@ -29,10 +29,10 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
 {
     // Rangée 1 : entrée + égaliseur
     addKnob ("inGain",   fr ("Entrée"));
-    addKnob ("lowGain",  fr ("Graves 100 Hz"));
-    addKnob ("midGain",  fr ("Médiums"));
+    addKnob ("lowGain",  fr ("Graves 100 Hz"), fr ("Graves"));
+    addKnob ("midGain",  fr ("Médiums"), fr ("Médiums"));
     addKnob ("midFreq",  fr ("Fréq. médiums"));
-    addKnob ("highGain", fr ("Aigus 8 kHz"));
+    addKnob ("highGain", fr ("Aigus 8 kHz"), fr ("Aigus"));
 
     // Rangée 2 : compresseur
     addKnob ("compThresh",  fr ("Seuil"));
@@ -42,14 +42,14 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     addKnob ("compMakeup",  fr ("Compensation"));
 
     // Rangée 3 : stéréo, limiteur, sortie
-    addKnob ("width",      fr ("Largeur"));
-    addKnob ("drive",      fr ("Poussée"));
+    addKnob ("width",      fr ("Largeur"), fr ("Largeur"));
+    addKnob ("drive",      fr ("Poussée"), fr ("Poussée"));
     addKnob ("ceiling",    fr ("Plafond"));
     addKnob ("limRelease", fr ("Relâch. limiteur"));
     addKnob ("outGain",    fr ("Sortie"));
 
     // Rangée 4 : dé-esseur
-    addKnob ("deessAmount", fr ("Quantité"));
+    addKnob ("deessAmount", fr ("Quantité"), fr ("Dé-esseur"));
     addKnob ("deessFreq",   fr ("Fréquence"));
 
     addAndMakeVisible (bypass);
@@ -128,13 +128,20 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     targetDb.fill (minDb);
     spectrumDb.fill (minDb);
 
-    setSize (760, 800);
+    viewButton.setColour (juce::TextButton::buttonColourId, bg);
+    viewButton.setColour (juce::TextButton::textColourOffId, accent);
+    viewButton.onClick = [this] { setSimpleView (! isSimpleView()); };
+    addAndMakeVisible (viewButton);
+
+    setSimpleView (isSimpleView());
     startTimerHz (30);
 }
 
-void MasteringEditor::addKnob (const juce::String& id, const juce::String& name)
+void MasteringEditor::addKnob (const juce::String& id, const juce::String& name, const juce::String& simpleName)
 {
     auto k = std::make_unique<Knob>();
+    k->name = name;
+    k->simpleName = simpleName;
 
     k->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     k->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 18);
@@ -174,14 +181,15 @@ void MasteringEditor::resized()
     presetArea = area.removeFromTop (40).reduced (2, 3);
     {
         auto p = presetArea.reduced (10, 6);
+        viewButton.setBounds (p.removeFromRight (100));
         p.removeFromLeft (50);                                // "STYLE" label
         for (auto& b : styleButtons)
-            b.setBounds (p.removeFromLeft (95).reduced (2, 0));
+            b.setBounds (p.removeFromLeft (80).reduced (2, 0));
 
-        p.removeFromLeft (30);
+        p.removeFromLeft (20);
         p.removeFromLeft (75);                                // "INTENSITÉ" label
         for (auto& b : intensityButtons)
-            b.setBounds (p.removeFromLeft (85).reduced (2, 0));
+            b.setBounds (p.removeFromLeft (72).reduced (2, 0));
     }
 
     auto l = loudnessArea.reduced (10, 6);
@@ -193,17 +201,31 @@ void MasteringEditor::resized()
 
     meterArea = area.removeFromRight (70).reduced (10, 24);
     gridArea  = area.withTrimmedTop (8);
-    rowH = gridArea.getHeight() / kRows;
-    const int colW = gridArea.getWidth() / kCols;
+    const bool simple = isSimpleView();
+    int cols = kCols;
+    if (simple)
+        cols = (int) std::count_if (knobs.begin(), knobs.end(), [] (const auto& k) { return k->simpleName.isNotEmpty(); });
 
-    for (size_t i = 0; i < knobs.size(); ++i)
+    rowH = gridArea.getHeight() / (simple ? 1 : kRows);
+    const int colW = gridArea.getWidth() / juce::jmax (1, cols);
+
+    int index = 0;
+    for (auto& k : knobs)
     {
-        auto cell = juce::Rectangle<int> (gridArea.getX() + (int) (i % kCols) * colW,
-                                          gridArea.getY() + (int) (i / kCols) * rowH,
+        const bool show = ! simple || k->simpleName.isNotEmpty();
+        k->slider.setVisible (show);
+        k->label.setVisible (show);
+        k->label.setText (simple ? k->simpleName : k->name, juce::dontSendNotification);
+        if (! show)
+            continue;
+
+        auto cell = juce::Rectangle<int> (gridArea.getX() + (index % cols) * colW,
+                                          gridArea.getY() + (index / cols) * rowH,
                                           colW, rowH).reduced (6, 4);
         cell.removeFromTop (16);                              // room for section title
-        knobs[i]->label.setBounds (cell.removeFromTop (18));
-        knobs[i]->slider.setBounds (cell);
+        k->label.setBounds (cell.removeFromTop (18));
+        k->slider.setBounds (cell);
+        ++index;
     }
 }
 
@@ -216,8 +238,9 @@ void MasteringEditor::paint (juce::Graphics& g)
     g.drawText ("STIDO EMPAYA MASTERING", 16, 14, 400, 30, juce::Justification::centredLeft);
 
     // Section panels + titles
+    const bool simple = isSimpleView();
     const char* titles[kRows] = { "ENTRÉE / ÉGALISEUR", "COMPRESSEUR", "STÉRÉO / LIMITEUR / SORTIE", "DÉ-ESSEUR" };
-    for (int r = 0; r < kRows; ++r)
+    for (int r = 0; r < (simple ? 1 : kRows); ++r)
     {
         auto row = juce::Rectangle<int> (gridArea.getX(), gridArea.getY() + r * rowH,
                                          gridArea.getWidth(), rowH).reduced (2, 3);
@@ -226,10 +249,12 @@ void MasteringEditor::paint (juce::Graphics& g)
 
         g.setColour (accent);
         g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText (fr (titles[r]), row.getX() + 10, row.getY() + 4, 300, 14, juce::Justification::centredLeft);
+        g.drawText (simple ? fr ("RÉGLAGES ESSENTIELS") : fr (titles[r]), row.getX() + 10, row.getY() + 4, 300, 14,
+                    juce::Justification::centredLeft);
     }
 
     // De-esser activity, to the right of its two knobs
+    if (! simple)
     {
         const auto row = juce::Rectangle<int> (gridArea.getX(), gridArea.getY() + 3 * rowH, gridArea.getWidth(), rowH);
         const auto info = row.withTrimmedLeft (2 * gridArea.getWidth() / kCols + 20).reduced (10, 0);
@@ -273,7 +298,7 @@ void MasteringEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.drawText ("STYLE", presetArea.getX() + 10, presetArea.getY(), 50, presetArea.getHeight(),
                 juce::Justification::centredLeft);
-    g.drawText (fr ("INTENSITÉ"), styleButtons[2].getRight() + 32, presetArea.getY(), 75, presetArea.getHeight(),
+    g.drawText (fr ("INTENSITÉ"), styleButtons[2].getRight() + 22, presetArea.getY(), 75, presetArea.getHeight(),
                 juce::Justification::centredLeft);
 
     // Peak meters (-60 .. 0 dB)
@@ -618,6 +643,7 @@ void MasteringEditor::beginCalibration()
     const int intensity = proc.apvts.state.getProperty ("intensity", -1);
     proc.applyStyle (style >= 0 ? style : 1);                // Équilibré by default
     proc.applyIntensity (intensity >= 0 ? intensity : 1);    // Moyenne by default
+    proc.setParameter ("ceiling", currentTarget().truePeak);  // true peak limiter: ceiling = profile ceiling
     refreshPresetButtons();
 
     analysisPhase = AnalysisPhase::calibrating;
@@ -764,4 +790,14 @@ void MasteringEditor::normalise()
     else
         msg += fr (" Rejouez le morceau pour vérifier.");
     show (msg);
+}
+
+void MasteringEditor::setSimpleView (bool simple)
+{
+    proc.apvts.state.setProperty ("view", simple ? 1 : 0, nullptr);
+    viewButton.setButtonText (simple ? fr ("Vue avancée") : fr ("Vue simple"));
+    viewButton.setTooltip (simple ? fr ("Afficher tous les réglages") : fr ("Afficher seulement l'essentiel, comme LANDR"));
+    setSize (760, simple ? 490 : 800);
+    resized();                                            // setSize does not call it when the size is unchanged
+    repaint();
 }

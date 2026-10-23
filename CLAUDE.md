@@ -35,6 +35,11 @@ Il résume l'historique du projet et les décisions prises, pour reprendre le tr
 - Chaîne finale : moteur → normalisation → mesures (= export) → Gain Match → sortie. L'analyse remet `normGain` à 0 et règle le moteur ; la normalisation se fait ensuite sur le morceau entier.
 - Bug corrigé : la courbe EQ n'était pas dessinée (`Path::isEmpty()` reste vrai après `startNewSubPath`). Gain Match toujours désactivé à l'ouverture d'un projet + bandeau d'avertissement. Fenêtre : 760 × 800.
 
+### Octobre 2026 — étape D + installateur Windows + limiteur true peak (branche `etape-d`, depuis `main` après la fusion de la PR #6)
+- Installateur Windows : `installer/windows.iss` (Inno Setup 6, UTF-8 avec BOM, français) ; VST3 dans `{commoncf64}\VST3`, application dans Program Files. CI : `iscc` (installé par Chocolatey s'il manque), artefact `STIDO-Empaya-Mastering-Installer-Windows`.
+- Limiteur : l'ancien `juce::dsp::Limiter` ne respectait pas le Plafond (gain de rattrapage puis écrêtage à 0 dBFS). Remplacé par `source/TruePeakLimiter.h` : détection sur le signal suréchantillonné ×4, anticipation 2 ms (maintien du gain minimal + moyenne glissante de même longueur), relâchement exponentiel, latence déclarée (`setLatencySamples`), Contourner garde le même retard. Logique vérifiée en simulation (sortie max = plafond). L'analyse règle le Plafond = plafond TP du profil. Sortie et Normalisation restent après le limiteur (Normaliser plafonne par la marge TP).
+- Vues : `apvts.state` « view » (1 = simple, par défaut). Vue simple 760 × 490 : en-tête, spectre + LOUDNESS, STYLE / INTENSITÉ, 6 boutons (Graves, Médiums, Aigus, Largeur, Poussée, Dé-esseur). Vue avancée 760 × 800 : tous les boutons. Bouton « Vue avancée / Vue simple » au bout de la rangée STYLE / INTENSITÉ.
+
 ## Pro Tools (AAX) — en attente de l'utilisateur
 - Pro Tools n'accepte que l'AAX : non compilé pour l'instant.
 - Étapes côté utilisateur : 1) compte développeur sur developer.avid.com/aax et téléchargement du SDK AAX ; 2) code d'activation Pro Tools Developer via devauth@avid.com, pour tester sans signature ; 3) outils de signature PACE via audiosdk@avid.com (objet « PACE Eden Signing Tools Request »), plus un iLok.
@@ -43,7 +48,5 @@ Il résume l'historique du projet et les décisions prises, pour reprendre le tr
 
 ## Pistes pour la suite
 - Compiler l'AAX, puis le signer (quand le SDK et les outils PACE seront disponibles).
-- Installateur Windows (comme le `.dmg` macOS).
-- Limiteur avec lookahead et true peak (actuellement le Plafond limite les échantillons, pas le true peak).
 - Compresseur multibande.
 - Signature et notarisation Apple (compte développeur Apple à 99 $/an), pour supprimer l'avertissement de Gatekeeper.

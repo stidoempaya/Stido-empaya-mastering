@@ -95,7 +95,8 @@ void MasteringProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     midPeak.prepare (spec);
     highShelf.prepare (spec);
     compressor.prepare (spec);
-    limiter.prepare (spec);
+    limiter.prepare (sampleRate, samplesPerBlock);
+    setLatencySamples (limiter.getLatency());
 
     cache = {};          // force the filter coefficients to be recomputed
     updateDSP();
@@ -218,8 +219,8 @@ void MasteringProcessor::updateDSP()
     compressor.setAttack    (prm.compAttack->load());
     compressor.setRelease   (prm.compRelease->load());
 
-    limiter.setThreshold (prm.ceiling->load());
-    limiter.setRelease   (prm.limRelease->load());
+    limiter.setCeiling (prm.ceiling->load());
+    limiter.setRelease (prm.limRelease->load());
 }
 
 //==============================================================================
@@ -270,11 +271,15 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
 
         drive.process (ctx);
-        limiter.process (ctx);
+        limiter.process (buffer);
         outGain.process (ctx);
         normGain.process (ctx);           // final level (normalisation), measured by the meters below
 
         gmOutMs = averageKWeighted (buffer, gmOutShelf, gmOutHighPass, gmOutMs);
+    }
+    else
+    {
+        limiter.process (buffer, false);  // bypass: same delay as the processed signal (latency compensation)
     }
 
     // Peak metering (keep the max until the editor reads it)

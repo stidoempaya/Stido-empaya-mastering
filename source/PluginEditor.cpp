@@ -618,6 +618,7 @@ void MasteringEditor::beginCalibration()
     const int intensity = proc.apvts.state.getProperty ("intensity", -1);
     proc.applyStyle (style >= 0 ? style : 1);                // Équilibré by default
     proc.applyIntensity (intensity >= 0 ? intensity : 1);    // Moyenne by default
+    proc.setParameter ("ceiling", currentTarget().truePeak);  // true peak limiter: ceiling = profile ceiling
     refreshPresetButtons();
 
     analysisPhase = AnalysisPhase::calibrating;

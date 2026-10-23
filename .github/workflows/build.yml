@@ -45,6 +45,26 @@ jobs:
           name: STIDO-Empaya-Mastering-${{ matrix.os }}
           path: build/StidoEmpayaMastering_artefacts/Release/
 
+      - name: Create Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $dir = "${env:ProgramFiles(x86)}\Inno Setup 6"
+            if (-not (Test-Path "$dir\ISCC.exe")) { choco install innosetup -y --no-progress }
+            $env:PATH += ";$dir"
+          }
+          iscc installer\windows.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: STIDO-Empaya-Mastering-Installer-Windows
+          path: installer/Output/STIDO-Empaya-Mastering-Windows-Setup.exe
+
       - name: Create macOS installer
         if: runner.os == 'macOS'
         run: |

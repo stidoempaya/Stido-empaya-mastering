@@ -96,18 +96,18 @@ void MasteringProcessor::updateDSP()
     if (low != cache.low)
     {
         cache.low = low;
-        *lowShelf.state = *Coeffs::makeLowShelf (sr, 100.0f, 0.707f, Decibels::decibelsToGain (low));
+        *lowShelf.state = *Coeffs::makeLowShelf (sr, lowShelfFreq, shelfQ, Decibels::decibelsToGain (low));
     }
     if (mid != cache.mid || mf != cache.midFreq)
     {
         cache.mid = mid;
         cache.midFreq = mf;
-        *midPeak.state = *Coeffs::makePeakFilter (sr, mf, 0.8f, Decibels::decibelsToGain (mid));
+        *midPeak.state = *Coeffs::makePeakFilter (sr, mf, midQ, Decibels::decibelsToGain (mid));
     }
     if (high != cache.high)
     {
         cache.high = high;
-        *highShelf.state = *Coeffs::makeHighShelf (sr, 8000.0f, 0.707f, Decibels::decibelsToGain (high));
+        *highShelf.state = *Coeffs::makeHighShelf (sr, highShelfFreq, shelfQ, Decibels::decibelsToGain (high));
     }
 
     inGain.setGainDecibels  (prm.inGain->load());
@@ -173,6 +173,32 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const float mR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, numSamples) : mL;
     if (mL > peakL.load()) peakL.store (mL);
     if (mR > peakR.load()) peakR.store (mR);
+
+    pushToAnalyser (buffer);
+}
+
+void MasteringProcessor::pushToAnalyser (const juce::AudioBuffer<float>& buffer)
+{
+    const auto* l = buffer.getReadPointer (0);
+    const auto* r = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : l;
+
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        fifo[(size_t) fifoIndex++] = 0.5f * (l[i] + r[i]);
+
+        if (fifoIndex == fftSize)
+        {
+            if (! analyserReady.load())
+            {
+                analyserBlock = fifo;
+                analyserReady.store (true);
+            }
+
+            // 50 % overlap: keep the second half for the next block
+            std::copy (fifo.begin() + fftSize / 2, fifo.end(), fifo.begin());
+            fifoIndex = fftSize / 2;
+        }
+    }
 }
 
 //==============================================================================

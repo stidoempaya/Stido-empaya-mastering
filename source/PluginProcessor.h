@@ -37,9 +37,19 @@ public:
     // Peak meters (linear), read and reset by the editor
     std::atomic<float> peakL { 0.0f }, peakR { 0.0f };
 
+    // EQ settings shared with the editor (EQ curve drawing)
+    static constexpr float lowShelfFreq = 100.0f, highShelfFreq = 8000.0f, shelfQ = 0.707f, midQ = 0.8f;
+
+    // Spectrum analyser: the audio thread fills analyserBlock (mono sum of the output)
+    // when analyserReady is false; the editor reads it, then sets the flag back to false.
+    static constexpr int fftOrder = 11, fftSize = 1 << fftOrder;
+    std::array<float, fftSize> analyserBlock {};
+    std::atomic<bool> analyserReady { false };
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     void updateDSP();
+    void pushToAnalyser (const juce::AudioBuffer<float>&);
 
     using Filter  = juce::dsp::IIR::Filter<float>;
     using Coeffs  = juce::dsp::IIR::Coefficients<float>;
@@ -59,6 +69,9 @@ private:
     } prm {};
 
     struct Cache { float low = 1e9f, mid = 1e9f, midFreq = 1e9f, high = 1e9f; } cache;
+
+    std::array<float, fftSize> fifo {};
+    int fifoIndex = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MasteringProcessor)
 };

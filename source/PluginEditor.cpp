@@ -8,6 +8,14 @@ namespace
     const juce::Colour panel   { 0xff1d2026 };
     const juce::Colour accent  { 0xff4fc3f7 };
     const juce::Colour textCol { 0xffd7dbe0 };
+    const juce::Colour eqCol   { 0xffffb74d };
+    const juce::Colour gridCol { 0xff2c313a };
+
+    constexpr float minFreq = 20.0f, maxFreq = 20000.0f;
+    constexpr float minDb = -90.0f, eqRangeDb = 18.0f;
+
+    // Position 0..1 on the log frequency axis -> frequency
+    float freqAt (float pos) { return minFreq * std::pow (maxFreq / minFreq, pos); }
 
     // Les textes francais sont en UTF-8 (accents)
     juce::String fr (const char* text) { return juce::String::fromUTF8 (text); }
@@ -43,7 +51,10 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     bypass.setColour (juce::ToggleButton::tickColourId, accent);
     bypassAttach = std::make_unique<ButtonAttachment> (proc.apvts, "bypass", bypass);
 
-    setSize (760, 540);
+    targetDb.fill (minDb);
+    spectrumDb.fill (minDb);
+
+    setSize (760, 720);
     startTimerHz (30);
 }
 
@@ -75,6 +86,9 @@ void MasteringEditor::resized()
 
     auto header = area.removeFromTop (36);
     bypass.setBounds (header.removeFromRight (90));
+
+    spectrumArea = area.removeFromTop (180).reduced (2, 3);
+    area.removeFromTop (6);
 
     meterArea = area.removeFromRight (70).reduced (10, 24);
     gridArea  = area.withTrimmedTop (8);
@@ -114,6 +128,8 @@ void MasteringEditor::paint (juce::Graphics& g)
         g.drawText (fr (titles[r]), row.getX() + 10, row.getY() + 4, 300, 14, juce::Justification::centredLeft);
     }
 
+    drawSpectrum (g);
+
     // Peak meters (-60 .. 0 dB)
     auto drawBar = [&] (juce::Rectangle<int> r, float db)
     {
@@ -150,4 +166,133 @@ void MasteringEditor::timerCallback()
     dbL = decay (dbL, proc.peakL.exchange (0.0f));
     dbR = decay (dbR, proc.peakR.exchange (0.0f));
     repaint (meterArea.expanded (10, 24));
+
+    if (proc.analyserReady.load())
+    {
+        std::fill (fftData.begin(), fftData.end(), 0.0f);
+        std::copy (proc.analyserBlock.begin(), proc.analyserBlock.end(), fftData.begin());
+        proc.analyserReady.store (false);
+        updateSpectrum();
+    }
+
+    // Fast rise, slow fall (about 36 dB/s)
+    for (int i = 0; i < numPoints; ++i)
+        spectrumDb[(size_t) i] = juce::jmax (targetDb[(size_t) i], spectrumDb[(size_t) i] - 1.2f);
+
+    repaint (spectrumArea);
+}
+
+void MasteringEditor::updateSpectrum()
+{
+    const double sr = proc.getSampleRate();
+    if (sr <= 0.0)
+        return;
+
+    window.multiplyWithWindowingTable (fftData.data(), (size_t) fftSize);
+    fft.performFrequencyOnlyForwardTransform (fftData.data());
+
+    const float binHz = (float) sr / (float) fftSize;
+    const float norm  = (float) fftSize * 0.5f;           // normalised Hann window: 0 dBFS sine -> 0 dB
+    const int lastBin = fftSize / 2;
+
+    for (int i = 0; i < numPoints; ++i)
+    {
+        const int b0 = juce::jlimit (1, lastBin, (int) std::floor (freqAt ((float) i / numPoints) / binHz));
+        const int b1 = juce::jlimit (b0, lastBin, (int) std::ceil (freqAt ((float) (i + 1) / numPoints) / binHz));
+
+        float mag = 0.0f;
+        for (int b = b0; b <= b1; ++b)
+            mag = juce::jmax (mag, fftData[(size_t) b]);
+
+        targetDb[(size_t) i] = juce::Decibels::gainToDecibels (mag / norm, minDb);
+    }
+}
+
+void MasteringEditor::drawSpectrum (juce::Graphics& g)
+{
+    g.setColour (panel);
+    g.fillRoundedRectangle (spectrumArea.toFloat(), 8.0f);
+
+    const auto plot = spectrumArea.toFloat().reduced (10.0f, 22.0f).withTrimmedBottom (-10.0f);
+    const float logRange = std::log (maxFreq / minFreq);
+
+    auto xFor = [&] (float f) { return plot.getX() + plot.getWidth() * std::log (f / minFreq) / logRange; };
+    auto yFor = [&] (float db) { return juce::jmap (juce::jlimit (minDb, 0.0f, db), minDb, 0.0f, plot.getBottom(), plot.getY()); };
+    auto yForEq = [&] (float db)
+    {
+        return juce::jmap (juce::jlimit (-eqRangeDb, eqRangeDb, db), -eqRangeDb, eqRangeDb, plot.getBottom(), plot.getY());
+    };
+
+    // Grid
+    g.setFont (juce::FontOptions (10.0f));
+    const float freqs[] = { 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
+    const char* freqLabels[] = { "50", "100", "200", "500", "1k", "2k", "5k", "10k" };
+    for (int i = 0; i < 8; ++i)
+    {
+        const float x = xFor (freqs[i]);
+        g.setColour (gridCol);
+        g.drawVerticalLine ((int) x, plot.getY(), plot.getBottom());
+        g.setColour (textCol.withAlpha (0.5f));
+        g.drawText (freqLabels[i], (int) x + 2, (int) plot.getBottom() - 12, 30, 12, juce::Justification::centredLeft);
+    }
+    for (float db = -18.0f; db > minDb; db -= 18.0f)
+    {
+        const float y = yFor (db);
+        g.setColour (gridCol);
+        g.drawHorizontalLine ((int) y, plot.getX(), plot.getRight());
+        g.setColour (textCol.withAlpha (0.5f));
+        g.drawText (juce::String ((int) db), (int) plot.getRight() - 30, (int) y - 12, 28, 12, juce::Justification::centredRight);
+    }
+
+    // Spectrum
+    juce::Path spectrum;
+    spectrum.startNewSubPath (plot.getX(), plot.getBottom());
+    for (int i = 0; i < numPoints; ++i)
+        spectrum.lineTo (xFor (freqAt (((float) i + 0.5f) / numPoints)), yFor (spectrumDb[(size_t) i]));
+    spectrum.lineTo (plot.getRight(), plot.getBottom());
+    spectrum.closeSubPath();
+
+    g.setColour (accent.withAlpha (0.25f));
+    g.fillPath (spectrum);
+    g.setColour (accent);
+    g.strokePath (spectrum, juce::PathStrokeType (1.5f));
+
+    // EQ curve (same filters as the processor)
+    const double sr = proc.getSampleRate();
+    if (sr > 0.0)
+    {
+        using Coeffs = juce::dsp::IIR::Coefficients<float>;
+        using juce::Decibels;
+        auto param = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+
+        auto low  = Coeffs::makeLowShelf (sr, MasteringProcessor::lowShelfFreq, MasteringProcessor::shelfQ,
+                                          Decibels::decibelsToGain (param ("lowGain")));
+        auto mid  = Coeffs::makePeakFilter (sr, param ("midFreq"), MasteringProcessor::midQ,
+                                            Decibels::decibelsToGain (param ("midGain")));
+        auto high = Coeffs::makeHighShelf (sr, MasteringProcessor::highShelfFreq, MasteringProcessor::shelfQ,
+                                           Decibels::decibelsToGain (param ("highGain")));
+
+        juce::Path eq;
+        for (float x = plot.getX(); x <= plot.getRight(); x += 2.0f)
+        {
+            const double f = freqAt ((x - plot.getX()) / plot.getWidth());
+            const double mag = low->getMagnitudeForFrequency (f, sr) * mid->getMagnitudeForFrequency (f, sr)
+                             * high->getMagnitudeForFrequency (f, sr);
+            const float y = yForEq (Decibels::gainToDecibels ((float) mag));
+
+            if (eq.isEmpty()) eq.startNewSubPath (x, y);
+            else              eq.lineTo (x, y);
+        }
+
+        g.setColour (eqCol);
+        g.strokePath (eq, juce::PathStrokeType (2.0f));
+    }
+
+    // Title / legend
+    auto top = spectrumArea.reduced (10, 4).removeFromTop (14);
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.setColour (accent);
+    g.drawText (fr ("SPECTRE (SORTIE)"), top, juce::Justification::centredLeft);
+    g.setColour (eqCol);
+    g.drawText (fr ("COURBE EQ (±18 dB)"), top, juce::Justification::centredRight);
 }

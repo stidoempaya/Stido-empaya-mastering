@@ -103,6 +103,20 @@ MasteringEditor::MasteringEditor (MasteringProcessor& p)
     setupGroup (intensityButtons, MasteringProcessor::intensityNames, 1002, [this] (int i) { proc.applyIntensity (i); });
     refreshPresetButtons();
 
+    analyseButton.setButtonText ("Analyser");
+    analyseButton.setColour (juce::TextButton::buttonColourId, accent);
+    analyseButton.setColour (juce::TextButton::textColourOffId, bg);
+    analyseButton.setTooltip (fr ("Jouez le refrain (la partie la plus forte) : le plugin corrige l'égaliseur "
+                                  "puis règle la Poussée pour atteindre la cible de la plateforme (environ 20 s)."));
+    analyseButton.onClick = [this]
+    {
+        if (analysisPhase == AnalysisPhase::idle)
+            startAnalysis();
+        else
+            finishAnalysis (fr ("Analyse annulée."));
+    };
+    addAndMakeVisible (analyseButton);
+
     targetDb.fill (minDb);
     spectrumDb.fill (minDb);
 
@@ -140,6 +154,8 @@ void MasteringEditor::resized()
     bypass.setBounds (header.removeFromRight (90));
     gainMatch.setBounds (header.removeFromRight (100));
     gainMatchInfo = header.removeFromRight (70);
+    header.removeFromRight (10);
+    analyseButton.setBounds (header.removeFromRight (140).reduced (0, 4));
 
     auto top = area.removeFromTop (200);
     loudnessArea = top.removeFromRight (220).reduced (2, 3);
@@ -289,6 +305,8 @@ void MasteringEditor::timerCallback()
 
     repaint (spectrumArea);
 
+    updateAnalysis();
+
     deessGr = juce::jmax (proc.deessReductionDb.exchange (0.0f), deessGr - 0.5f);
     matchDb = proc.gainMatchDb.load();
     repaint (gridArea.withTrimmedTop (3 * rowH));
@@ -306,8 +324,7 @@ void MasteringEditor::drawLoudness (juce::Graphics& g)
     g.setColour (panel);
     g.fillRoundedRectangle (loudnessArea.toFloat(), 8.0f);
 
-    const auto& target = MasteringProcessor::loudnessTargets[juce::jlimit (0, (int) std::size (MasteringProcessor::loudnessTargets) - 1,
-                                                                         targetBox.getSelectedItemIndex())];
+    const auto& target = currentTarget();
     auto valid = [] (float v) { return v > -70.0f; };
     auto fmt = [&] (float v, const char* unit) { return valid (v) ? juce::String (v, 1) + unit : juce::String (fr ("—")); };
 
@@ -371,6 +388,17 @@ void MasteringEditor::drawLoudness (juce::Graphics& g)
         adviceCol = badCol;
     }
 
+    if (analysisPhase != AnalysisPhase::idle)
+    {
+        advice = fr ("Analyse en cours : laissez jouer le refrain (la partie la plus forte).");
+        adviceCol = accent;
+    }
+    else if (analysisMessage.isNotEmpty() && juce::Time::getMillisecondCounterHiRes() < messageUntilMs)
+    {
+        advice = analysisMessage;
+        adviceCol = accent;
+    }
+
     g.setColour (adviceCol);
     g.setFont (juce::FontOptions (11.0f));
     g.drawFittedText (advice, r.withTrimmedBottom (22), juce::Justification::topLeft, 3);
@@ -388,6 +416,21 @@ void MasteringEditor::updateSpectrum()
     const float binHz = (float) sr / (float) fftSize;
     const float norm  = (float) fftSize * 0.5f;           // normalised Hann window: 0 dBFS sine -> 0 dB
     const int lastBin = fftSize / 2;
+
+    // Analysis: average power per bin of the (non-silent) input
+    if (analysisPhase == AnalysisPhase::listening)
+    {
+        double total = 0.0;
+        for (int b = 1; b <= lastBin; ++b)
+            total += juce::square ((double) fftData[(size_t) b] / norm);
+
+        if (total > 1.0e-7)                                   // ignore silence (below about -70 dBFS)
+        {
+            for (int b = 1; b <= lastBin; ++b)
+                analysisPower[(size_t) b] += juce::square ((double) fftData[(size_t) b] / norm);
+            ++analysisFrames;
+        }
+    }
 
     for (int i = 0; i < numPoints; ++i)
     {
@@ -486,7 +529,8 @@ void MasteringEditor::drawSpectrum (juce::Graphics& g)
     auto top = spectrumArea.reduced (10, 4).removeFromTop (14);
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.setColour (accent);
-    g.drawText (fr ("SPECTRE (SORTIE)"), top, juce::Justification::centredLeft);
+    g.drawText (analysisPhase == AnalysisPhase::listening ? fr ("SPECTRE (ENTRÉE, ANALYSE)") : fr ("SPECTRE (SORTIE)"),
+                top, juce::Justification::centredLeft);
     g.setColour (eqCol);
     g.drawText (fr ("COURBE EQ (±18 dB)"), top, juce::Justification::centredRight);
 }
@@ -502,4 +546,140 @@ void MasteringEditor::refreshPresetButtons()
         styleButtons[(size_t) i].setToggleState (i == style, juce::dontSendNotification);
         intensityButtons[(size_t) i].setToggleState (i == intensity, juce::dontSendNotification);
     }
+}
+
+MasteringEditor::~MasteringEditor()
+{
+    proc.analyseInput.store (false);
+}
+
+const LoudnessTarget& MasteringEditor::currentTarget() const
+{
+    constexpr int last = (int) std::size (MasteringProcessor::loudnessTargets) - 1;
+    return MasteringProcessor::loudnessTargets[juce::jlimit (0, last, targetBox.getSelectedItemIndex())];
+}
+
+void MasteringEditor::startAnalysis()
+{
+    analysisPower.assign ((size_t) fftSize / 2 + 1, 0.0);
+    analysisFrames = 0;
+    analysisMessage = {};
+    analysisPhase = AnalysisPhase::listening;
+    phaseStartMs = juce::Time::getMillisecondCounterHiRes();
+
+    proc.setParameter ("bypass", 0.0f);
+    proc.analyseInput.store (true);
+}
+
+void MasteringEditor::beginCalibration()
+{
+    // Phase 2: EQ correction + style + intensity, then Poussée adjusted by steps of ~3.5 s
+    proc.analyseInput.store (false);
+    analysisEq = MasteringProcessor::computeAnalysisEq (analysisPower, proc.getSampleRate());
+    proc.setAnalysisEq (analysisEq);
+
+    const int style     = proc.apvts.state.getProperty ("style", -1);
+    const int intensity = proc.apvts.state.getProperty ("intensity", -1);
+    proc.applyStyle (style >= 0 ? style : 1);                // Équilibré by default
+    proc.applyIntensity (intensity >= 0 ? intensity : 1);    // Moyenne by default
+    refreshPresetButtons();
+
+    analysisPhase = AnalysisPhase::calibrating;
+    calibStep = 0;
+    phaseStartMs = windowStartMs = juce::Time::getMillisecondCounterHiRes();
+    proc.loudnessResetRequested.store (true);
+}
+
+void MasteringEditor::finishAnalysis (const juce::String& message)
+{
+    analysisPhase = AnalysisPhase::idle;
+    proc.analyseInput.store (false);
+    proc.loudnessResetRequested.store (true);           // fresh integrated measurement with the new settings
+
+    analysisMessage = message;
+    messageUntilMs = juce::Time::getMillisecondCounterHiRes() + 15000.0;
+    analyseButton.setButtonText ("Analyser");
+}
+
+void MasteringEditor::updateAnalysis()
+{
+    constexpr double listenSeconds = 8.0, windowMs = 3500.0;
+    constexpr int maxCalibSteps = 4;
+    const double now = juce::Time::getMillisecondCounterHiRes();
+    const double sr = proc.getSampleRate();
+
+    if (analysisPhase == AnalysisPhase::listening)
+    {
+        const int needed = juce::jmax (1, (int) (listenSeconds * sr / (fftSize / 2)));
+
+        if (analysisFrames >= needed)
+            beginCalibration();
+        else if (now - phaseStartMs > 60000.0)
+            finishAnalysis (fr ("Aucun son détecté : lancez la lecture, puis recliquez sur Analyser."));
+        else
+            analyseButton.setButtonText (analysisFrames == 0 ? fr ("Lancez la lecture…")
+                                                             : fr ("Écoute… ") + juce::String (50 * analysisFrames / needed) + " %");
+        return;
+    }
+
+    if (analysisPhase != AnalysisPhase::calibrating)
+        return;
+
+    if (now - phaseStartMs > 90000.0)
+    {
+        finishAnalysis (fr ("Analyse interrompue : la lecture s'est arrêtée."));
+        return;
+    }
+
+    const double elapsed = now - windowStartMs;
+    const int progress = 50 + (int) (50.0 * (calibStep + juce::jmin (1.0, elapsed / windowMs)) / maxCalibSteps);
+    analyseButton.setButtonText (fr ("Réglage… ") + juce::String (juce::jmin (99, progress)) + " %");
+
+    if (elapsed < windowMs)
+        return;
+
+    const float shortTerm = proc.shortTermLufs.load();
+    if (shortTerm <= -70.0f)                              // silence: wait for the music
+    {
+        windowStartMs = now;
+        return;
+    }
+
+    lastMeasuredLufs = shortTerm;
+    ++calibStep;
+
+    // True peak above -1 dBTP: lower the ceiling (down to -3 dB)
+    const float truePeak = proc.truePeakDb.load();
+    if (truePeak > MasteringProcessor::truePeakTarget)
+        proc.setParameter ("ceiling", juce::jlimit (-3.0f, -1.0f, proc.getParameterValue ("ceiling")
+                                                                   - (truePeak - MasteringProcessor::truePeakTarget) - 0.2f));
+
+    const float error = currentTarget().lufs - shortTerm;
+
+    if (std::abs (error) > 0.5f)
+    {
+        // Poussée (0..12 dB) first, then Sortie (only downwards) when the input is already too loud
+        const float total = proc.getParameterValue ("drive") + proc.getParameterValue ("outGain") + error;
+        const float drive = juce::jlimit (0.0f, 12.0f, total);
+        proc.setParameter ("drive", drive);
+        proc.setParameter ("outGain", juce::jlimit (-12.0f, 0.0f, total - drive));
+    }
+
+    if (std::abs (error) <= 0.5f || calibStep >= maxCalibSteps)
+    {
+        auto db = [] (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1); };
+        juce::String msg = fr ("Analyse terminée : graves ") + db (analysisEq.low) + fr (", aigus ") + db (analysisEq.high) + " dB";
+        if (analysisEq.mid != 0.0f)
+            msg += fr (", ") + db (analysisEq.mid) + " dB @ " + juce::String ((int) analysisEq.midFreq) + " Hz";
+        msg += fr (". Poussée ") + juce::String (proc.getParameterValue ("drive"), 1) + " dB";
+        if (std::abs (error) > 0.5f)
+            msg += fr (". Cible proche, vérifiez le LUFS intégré.");
+        else
+            msg += fr (" → ") + juce::String (shortTerm, 1) + " LUFS.";
+        finishAnalysis (msg);
+        return;
+    }
+
+    proc.loudnessResetRequested.store (true);
+    windowStartMs = now;
 }

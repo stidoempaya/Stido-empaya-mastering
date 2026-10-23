@@ -66,6 +66,17 @@ public:
     void applyStyle (int index);
     void applyIntensity (int index);
 
+    // "Analyser": EQ correction computed from the average input spectrum (power per FFT bin).
+    // Once stored, the styles are applied on top of it.
+    struct AnalysisEq { float low = 0.0f, high = 0.0f, mid = 0.0f, midFreq = 1000.0f; };
+    static AnalysisEq computeAnalysisEq (const std::vector<double>& binPower, double sampleRate);
+    void setAnalysisEq (const AnalysisEq&);
+    void setParameter (const char* id, float value) { setParameters ({ { id, value } }); }
+    float getParameterValue (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
+
+    // While true, the spectrum analyser receives the input (before processing) instead of the output
+    std::atomic<bool> analyseInput { false };
+
     // De-esser gain reduction (dB, positive) and gain match correction (dB), for display
     std::atomic<float> deessReductionDb { 0.0f }, gainMatchDb { 0.0f };
 

@@ -8,6 +8,7 @@ Chaîne de mastering stéréo :
 
 Un indicateur de crête L/R et un bouton Bypass sont inclus, ainsi que :
 - un **analyseur de spectre** du son en sortie, avec la courbe de l'égaliseur superposée ;
+- un bouton **Analyser** : en jouant le refrain (~20 s), le plugin compare le spectre du morceau à une courbe de référence et corrige l'égaliseur en douceur, puis règle la Poussée pour atteindre la cible LUFS de la plateforme choisie (et baisse le Plafond si le true peak dépasse -1 dBTP) ;
 - des **styles** (Chaud, Équilibré, Ouvert : égaliseur, dé-esseur, largeur, vitesse du compresseur) et une **Intensité** (Faible, Moyenne, Forte : compression, poussée, limiteur), qui règlent plusieurs boutons en un clic, comme LANDR ; tout reste ensuite réglable à la main ;
 - un **dé-esseur** (adoucit les « s » trop aigus : Quantité 0 % = désactivé, Fréquence 3 à 12 kHz) ;
 - un bouton **Gain Match** : le master est écouté au même volume que l'original, pour le comparer honnêtement avec Contourner (les mesures restent celles du master) ;

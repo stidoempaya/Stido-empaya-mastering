@@ -7,7 +7,7 @@ class MasteringEditor : public juce::AudioProcessorEditor,
 {
 public:
     explicit MasteringEditor (MasteringProcessor&);
-    ~MasteringEditor() override = default;
+    ~MasteringEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -46,6 +46,23 @@ private:
     std::array<juce::TextButton, 3> styleButtons, intensityButtons;
     juce::Rectangle<int> presetArea;
     void refreshPresetButtons();
+
+    // "Analyser": listen to the input (EQ correction), then adjust Poussée to reach the loudness target
+    enum class AnalysisPhase { idle, listening, calibrating };
+    juce::TextButton analyseButton;
+    AnalysisPhase analysisPhase = AnalysisPhase::idle;
+    std::vector<double> analysisPower;
+    int analysisFrames = 0, calibStep = 0;
+    double phaseStartMs = 0.0, windowStartMs = 0.0, messageUntilMs = 0.0;
+    float lastMeasuredLufs = MasteringProcessor::noLoudness;
+    MasteringProcessor::AnalysisEq analysisEq;
+    juce::String analysisMessage;
+
+    const LoudnessTarget& currentTarget() const;
+    void startAnalysis();
+    void beginCalibration();
+    void finishAnalysis (const juce::String& message);
+    void updateAnalysis();
     float lufsM = MasteringProcessor::noLoudness, lufsS = MasteringProcessor::noLoudness,
           lufsI = MasteringProcessor::noLoudness, truePeak = MasteringProcessor::noLoudness;
 

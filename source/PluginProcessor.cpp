@@ -227,6 +227,10 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear (ch, 0, numSamples);
 
+    const bool inputToAnalyser = analyseInput.load();
+    if (inputToAnalyser)
+        pushToAnalyser (buffer);
+
     const bool active = prm.bypass->load() < 0.5f;
 
     if (active)
@@ -274,7 +278,8 @@ void MasteringProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     if (mL > peakL.load()) peakL.store (mL);
     if (mR > peakR.load()) peakR.store (mR);
 
-    pushToAnalyser (buffer);
+    if (! inputToAnalyser)
+        pushToAnalyser (buffer);
     measureLoudness (buffer);
 
     // Gain match, after the meters (they always show the real master). Estimates freeze while bypassed.
@@ -518,29 +523,96 @@ void MasteringProcessor::setParameters (std::initializer_list<std::pair<const ch
 
 void MasteringProcessor::applyStyle (int index)
 {
-    // Tone: EQ, de-esser, stereo width, compressor speed
-    switch (index)
-    {
-        case 0:  // Chaud : graves généreux, aigus adoucis, compression lente
-            setParameters ({ { "lowGain", 2.5f }, { "midGain", -1.0f }, { "midFreq", 2500.0f }, { "highGain", -1.0f },
-                             { "deessAmount", 20.0f }, { "width", 100.0f },
-                             { "compAttack", 30.0f }, { "compRelease", 200.0f } });
-            break;
-        case 1:  // Équilibré : léger sourire, neutre
-            setParameters ({ { "lowGain", 1.0f }, { "midGain", 0.0f }, { "midFreq", 1000.0f }, { "highGain", 1.0f },
-                             { "deessAmount", 15.0f }, { "width", 105.0f },
-                             { "compAttack", 20.0f }, { "compRelease", 150.0f } });
-            break;
-        case 2:  // Ouvert : présence et brillance, plus large, compression rapide
-            setParameters ({ { "lowGain", 0.0f }, { "midGain", 1.0f }, { "midFreq", 3000.0f }, { "highGain", 2.5f },
-                             { "deessAmount", 25.0f }, { "width", 115.0f },
-                             { "compAttack", 15.0f }, { "compRelease", 120.0f } });
-            break;
-        default:
-            return;
-    }
+    // Tone: EQ, de-esser, stereo width, compressor speed.
+    // Shelf gains are offsets added to a base: the analysis correction if there is one, else +1 dB of bass.
+    struct Tone { float low, high, mid, midFreq, deess, width, attack, release; };
+    static constexpr Tone tones[] = {
+        { 1.5f, -1.0f, -1.0f, 2500.0f, 20.0f, 100.0f, 30.0f, 200.0f },   // Chaud : graves généreux, aigus adoucis, compression lente
+        { 0.0f,  1.0f,  0.0f, 1000.0f, 15.0f, 105.0f, 20.0f, 150.0f },   // Équilibré : léger sourire, neutre
+        { -1.0f, 2.5f,  1.0f, 3000.0f, 25.0f, 115.0f, 15.0f, 120.0f } }; // Ouvert : présence, brillance, plus large
+
+    if (index < 0 || index >= (int) std::size (tones))
+        return;
+
+    const auto& t = tones[index];
+    const auto& st = apvts.state;
+    const bool analysed = st.getProperty ("anaValid", false);
+
+    const float baseLow  = analysed ? (float) st.getProperty ("anaLow", 0.0f)  : 1.0f;
+    const float baseHigh = analysed ? (float) st.getProperty ("anaHigh", 0.0f) : 0.0f;
+    const float mid      = analysed ? (float) st.getProperty ("anaMid", 0.0f) : t.mid;
+    const float midFreq  = analysed ? (float) st.getProperty ("anaMidFreq", 1000.0f) : t.midFreq;
+
+    setParameters ({ { "lowGain", juce::jlimit (-6.0f, 6.0f, baseLow + t.low) }, { "midGain", mid }, { "midFreq", midFreq },
+                     { "highGain", juce::jlimit (-6.0f, 6.0f, baseHigh + t.high) },
+                     { "deessAmount", t.deess }, { "width", t.width },
+                     { "compAttack", t.attack }, { "compRelease", t.release } });
 
     apvts.state.setProperty ("style", index, nullptr);
+}
+
+void MasteringProcessor::setAnalysisEq (const AnalysisEq& eq)
+{
+    apvts.state.setProperty ("anaValid", true, nullptr);
+    apvts.state.setProperty ("anaLow", eq.low, nullptr);
+    apvts.state.setProperty ("anaHigh", eq.high, nullptr);
+    apvts.state.setProperty ("anaMid", eq.mid, nullptr);
+    apvts.state.setProperty ("anaMidFreq", eq.midFreq, nullptr);
+}
+
+MasteringProcessor::AnalysisEq MasteringProcessor::computeAnalysisEq (const std::vector<double>& binPower, double sampleRate)
+{
+    // 1/3-octave band levels compared with a reference "balanced master" tilt of -3.5 dB/octave
+    // (relative to 500 Hz - 2 kHz). Corrections are half the deviation, kept gentle.
+    constexpr double slope = -3.5;
+    const int lastBin = (int) binPower.size() - 1;
+    const double binHz = sampleRate / (2.0 * lastBin);
+
+    struct Band { double fc, dev; };
+    std::vector<Band> bands;
+
+    for (double fc = 31.5; fc <= 16000.0 && fc * 1.12 < sampleRate * 0.5; fc *= std::pow (2.0, 1.0 / 3.0))
+    {
+        const int b0 = juce::jlimit (1, lastBin, (int) std::ceil (fc / 1.1225 / binHz));
+        const int b1 = juce::jlimit (b0, lastBin, (int) std::floor (fc * 1.1225 / binHz));
+
+        double p = 0.0;
+        for (int b = b0; b <= b1; ++b)
+            p += binPower[(size_t) b];
+
+        if (p > 0.0)
+            bands.push_back ({ fc, 10.0 * std::log10 (p) - slope * std::log2 (fc / 1000.0) });
+    }
+
+    auto meanDev = [&] (double lo, double hi)
+    {
+        double sum = 0.0;
+        int n = 0;
+        for (const auto& b : bands)
+            if (b.fc >= lo && b.fc <= hi) { sum += b.dev; ++n; }
+        return n > 0 ? sum / n : 0.0;
+    };
+
+    const double ref = meanDev (500.0, 2000.0);
+    const double lowDev   = meanDev (40.0, 160.0) - ref;
+    const double mudDev   = meanDev (200.0, 400.0) - ref;
+    const double harshDev = meanDev (2000.0, 5000.0) - ref;
+    const double highDev  = meanDev (6300.0, 12500.0) - ref;
+
+    AnalysisEq eq;
+    eq.low  = juce::jlimit (-3.0f, 3.0f, (float) (-0.5 * lowDev));
+    eq.high = juce::jlimit (-3.0f, 3.0f, (float) (-0.5 * highDev));
+
+    // Mid band: fix the larger problem (mud or harshness) if it stands out by more than 1.5 dB
+    const bool mudWorse = std::abs (mudDev) >= std::abs (harshDev);
+    const double midDev = mudWorse ? mudDev : harshDev;
+    if (std::abs (midDev) > 1.5)
+    {
+        eq.midFreq = mudWorse ? 300.0f : 3150.0f;
+        eq.mid = juce::jlimit (-3.0f, 2.0f, (float) (-0.5 * midDev));
+    }
+
+    return eq;
 }
 
 void MasteringProcessor::applyIntensity (int index)

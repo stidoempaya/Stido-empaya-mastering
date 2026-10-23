@@ -4,9 +4,23 @@ Interface et paramètres entièrement en français.
 
 Chaîne de mastering stéréo :
 
-**Input → EQ (shelf grave 100 Hz, cloche médium réglable, shelf aigu 8 kHz) → Compresseur "glue" → Makeup → Width (Mid/Side) → Drive → Limiteur (ceiling) → Output**
+**Input → EQ (shelf grave 100 Hz, cloche médium réglable, shelf aigu 8 kHz) → Dé-esseur → Compresseur "glue" → Makeup → Width (Mid/Side) → Drive → Limiteur (ceiling) → Output → Normalisation**
 
-Un indicateur de crête L/R et un bouton Bypass sont inclus. Tous les paramètres sont automatisables et sauvegardés avec le projet.
+Organisation :
+1. le **moteur de mastering** traite le son (égaliseur, dé-esseur, compresseur, largeur, poussée, limiteur) ;
+2. le **profil** (Apple Music, Spotify, YouTube, Deezer, Tidal, Amazon Music) définit la cible de loudness et le plafond true peak ;
+3. la **normalisation** ajuste le niveau final si nécessaire : le bouton « Normaliser » calcule un gain fixe à partir du LUFS intégré réellement mesuré, sans dépasser le plafond true peak du profil ;
+4. le **Gain Match** sert uniquement à comparer à l'oreille le son traité et l'original à volume égal : il ne modifie ni les réglages ni les mesures.
+
+Un indicateur de crête L/R et un bouton Bypass sont inclus, ainsi que :
+- un **analyseur de spectre** du son en sortie, avec la courbe de l'égaliseur superposée ;
+- un bouton **Analyser** : en jouant le refrain (~20 s), le plugin compare le spectre du morceau à une courbe de référence et corrige l'égaliseur en douceur, puis règle la Poussée pour atteindre la cible LUFS de la plateforme choisie (et baisse le Plafond si le true peak dépasse -1 dBTP) ;
+- des **styles** (Chaud, Équilibré, Ouvert : égaliseur, dé-esseur, largeur, vitesse du compresseur) et une **Intensité** (Faible, Moyenne, Forte : compression, poussée, limiteur), qui règlent plusieurs boutons en un clic, comme LANDR ; tout reste ensuite réglable à la main ;
+- un **dé-esseur** (adoucit les « s » trop aigus : Quantité 0 % = désactivé, Fréquence 3 à 12 kHz) ;
+- un bouton **Gain Match** : le master est écouté au même volume que l'original, pour le comparer honnêtement avec Contourner (les mesures restent celles du master) ;
+- un **indicateur de loudness** (norme ITU-R BS.1770 / EBU R128) : LUFS intégré, court terme, momentané et true peak, avec la cible de la plateforme choisie (Apple Music -16 LUFS, Spotify -14, YouTube -14, Deezer -15, Tidal -14 : true peak -1 dBTP ; Amazon Music -14 LUFS, -2 dBTP) et un conseil de réglage.
+
+Tous les paramètres sont automatisables et sauvegardés avec le projet.
 
 ## Prérequis
 - CMake ≥ 3.22
@@ -50,6 +64,4 @@ cmake --build build --config Release
 
 ## Pistes d'amélioration
 - Compresseur multibande (ajouter `juce::dsp::LinkwitzRileyFilter`)
-- Mesure LUFS (filtre K-weighting + intégration 400 ms / 3 s)
 - Limiteur avec lookahead et détection true-peak (suréchantillonnage via `juce::dsp::Oversampling`)
-- Analyseur de spectre (FFT) dans l'éditeur

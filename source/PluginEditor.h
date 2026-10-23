@@ -7,7 +7,7 @@ class MasteringEditor : public juce::AudioProcessorEditor,
 {
 public:
     explicit MasteringEditor (MasteringProcessor&);
-    ~MasteringEditor() override = default;
+    ~MasteringEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -15,9 +15,13 @@ public:
 private:
     void timerCallback() override;
     void addKnob (const juce::String& paramId, const juce::String& name);
+    void updateSpectrum();
+    void drawSpectrum (juce::Graphics&);
+    void drawLoudness (juce::Graphics&);
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     struct Knob
     {
@@ -29,11 +33,50 @@ private:
     MasteringProcessor& proc;
     std::vector<std::unique_ptr<Knob>> knobs;
 
-    juce::ToggleButton bypass { "Bypass" };
-    std::unique_ptr<ButtonAttachment> bypassAttach;
+    juce::ToggleButton bypass { "Bypass" }, gainMatch { "Gain Match" };
+    std::unique_ptr<ButtonAttachment> bypassAttach, gainMatchAttach;
+    float deessGr = 0.0f, matchDb = 0.0f;
+    juce::TooltipWindow tooltips { this };
+
+    juce::ComboBox targetBox;
+    std::unique_ptr<ComboAttachment> targetAttach;
+    juce::TextButton resetLoudness, normaliseButton;
+    void normalise();
+
+    // Style / intensity shortcuts
+    std::array<juce::TextButton, 3> styleButtons, intensityButtons;
+    juce::Rectangle<int> presetArea;
+    void refreshPresetButtons();
+
+    // "Analyser": listen to the input (EQ correction), then adjust Poussée to reach the loudness target
+    enum class AnalysisPhase { idle, listening, calibrating };
+    juce::TextButton analyseButton;
+    AnalysisPhase analysisPhase = AnalysisPhase::idle;
+    std::vector<double> analysisPower;
+    int analysisFrames = 0, calibStep = 0;
+    double phaseStartMs = 0.0, windowStartMs = 0.0, messageUntilMs = 0.0;
+    float lastMeasuredLufs = MasteringProcessor::noLoudness;
+    MasteringProcessor::AnalysisEq analysisEq;
+    juce::String analysisMessage;
+
+    const LoudnessTarget& currentTarget() const;
+    void startAnalysis();
+    void beginCalibration();
+    void finishAnalysis (const juce::String& message);
+    void updateAnalysis();
+    float lufsM = MasteringProcessor::noLoudness, lufsS = MasteringProcessor::noLoudness,
+          lufsI = MasteringProcessor::noLoudness, truePeak = MasteringProcessor::noLoudness;
 
     float dbL = -100.f, dbR = -100.f;
-    juce::Rectangle<int> gridArea, meterArea;
+    juce::Rectangle<int> gridArea, meterArea, spectrumArea, loudnessArea, gainMatchInfo;
+
+    // Spectrum analyser
+    static constexpr int fftSize = MasteringProcessor::fftSize;
+    static constexpr int numPoints = 240;                 // log-spaced points, 20 Hz .. 20 kHz
+    juce::dsp::FFT fft { MasteringProcessor::fftOrder };
+    juce::dsp::WindowingFunction<float> window { (size_t) fftSize, juce::dsp::WindowingFunction<float>::hann };
+    std::array<float, 2 * fftSize> fftData {};
+    std::array<float, numPoints> targetDb {}, spectrumDb {};
     int rowH = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MasteringEditor)
